@@ -43,15 +43,13 @@ const REQUIRED_SKILLS = ["tdd", "diagnose", "grill-with-docs"];
 export default function mattRalphExtension(pi: ExtensionAPI) {
 	let currentCwd = process.cwd();
 
-	pi.registerCommand("matt", {
-		description:
-			"Matt Pocock-style workflows. Use: /matt ralph <implement|status|resume|stop|cancel|archive|clean|list>",
-		argumentHint:
-			"ralph implement <issue-or-prd> [--max-iterations N] | ralph status | ralph resume <session> | ralph stop",
-		getArgumentCompletions: async (argumentPrefix: string) => getMattCompletions(argumentPrefix, currentCwd),
+	pi.registerCommand("ralph", {
+		description: "Matt Pocock-style workflows. Use: /ralph <implement|status|resume|stop|cancel|archive|clean|list>",
+		argumentHint: "implement <issue-or-prd> [--max-iterations N] | status | resume <session> | stop",
+		getArgumentCompletions: async (argumentPrefix: string) => getRalphCompletions(argumentPrefix, currentCwd),
 		handler: async (args: string, ctx: ExtensionContext) => {
 			currentCwd = ctx.cwd;
-			await handleMattCommand(pi, args, ctx);
+			await handleRalphCommand(pi, args, ctx);
 		},
 	} as any);
 
@@ -160,95 +158,84 @@ export default function mattRalphExtension(pi: ExtensionAPI) {
 	});
 }
 
-async function getMattCompletions(argumentPrefix: string, cwd: string): Promise<AutocompleteItem[] | null> {
+async function getRalphCompletions(argumentPrefix: string, cwd: string): Promise<AutocompleteItem[] | null> {
 	const commands: AutocompleteItem[] = [
 		{
-			value: "ralph implement ",
-			label: "ralph implement",
+			value: "implement ",
+			label: "implement",
 			description: "Start an implementation loop for an issue or PRD",
 		},
 		{
-			value: "ralph implement # --max-iterations ",
-			label: "ralph implement --max-iterations",
+			value: "implement # --max-iterations ",
+			label: "implement --max-iterations",
 			description: "Start with a safety iteration cap",
 		},
-		{ value: "ralph status", label: "ralph status", description: "List Matt Ralph sessions in .ralph/" },
-		{ value: "ralph list", label: "ralph list", description: "Alias for status" },
+		{ value: "status", label: "status", description: "List Matt Ralph sessions in .ralph/" },
+		{ value: "list", label: "list", description: "Alias for status" },
 		{
-			value: "ralph list --archived",
-			label: "ralph list --archived",
+			value: "list --archived",
+			label: "list --archived",
 			description: "List archived Matt Ralph sessions",
 		},
-		{ value: "ralph resume ", label: "ralph resume", description: "Resume a paused or existing Matt Ralph session" },
-		{ value: "ralph stop", label: "ralph stop", description: "Pause the active Matt Ralph session" },
-		{ value: "ralph cancel ", label: "ralph cancel", description: "Cancel a session; leaves notes intact" },
-		{ value: "ralph archive ", label: "ralph archive", description: "Archive a paused or completed session" },
-		{ value: "ralph clean", label: "ralph clean", description: "Delete completed session state files" },
-		{ value: "ralph clean --all", label: "ralph clean --all", description: "Delete completed states and notes" },
+		{ value: "resume ", label: "resume", description: "Resume a paused or existing Matt Ralph session" },
+		{ value: "stop", label: "stop", description: "Pause the active Matt Ralph session" },
+		{ value: "cancel ", label: "cancel", description: "Cancel a session; leaves notes intact" },
+		{ value: "archive ", label: "archive", description: "Archive a paused or completed session" },
+		{ value: "clean", label: "clean", description: "Delete completed session state files" },
+		{ value: "clean --all", label: "clean --all", description: "Delete completed states and notes" },
 	];
 	const hasTrailingSpace = /\s$/.test(argumentPrefix);
 	const trimmed = argumentPrefix.trim();
 	const parts = trimmed ? trimmed.split(/\s+/) : [];
 
-	if (parts.length === 0 || (parts.length === 1 && !hasTrailingSpace)) {
+	if (parts.length === 0) return commands;
+	if (parts.length === 1 && !hasTrailingSpace) {
 		const prefix = parts[0]?.toLowerCase() ?? "";
-		const item = { value: "ralph ", label: "ralph", description: "Matt Pocock-style implementation loop commands" };
-		return item.label.startsWith(prefix) ? [item] : null;
-	}
-
-	if (parts[0] !== "ralph") return null;
-	if (parts.length === 1 && hasTrailingSpace) return commands;
-	if (parts.length === 2 && !hasTrailingSpace) {
-		const prefix = parts[1]?.toLowerCase() ?? "";
-		const matches = commands.filter((item) => item.label.replace(/^ralph\s+/, "").startsWith(prefix));
+		const matches = commands.filter((item) => item.label.startsWith(prefix));
 		return matches.length > 0 ? matches : null;
 	}
 
-	const subcommand = parts[1];
-	if (["resume", "cancel", "archive"].includes(subcommand) && (parts.length === 2 || parts.length === 3)) {
-		const completedPrefix = hasTrailingSpace ? "" : (parts[2] ?? "");
+	const subcommand = parts[0];
+	if (["resume", "cancel", "archive"].includes(subcommand) && (parts.length === 1 || parts.length === 2)) {
+		const completedPrefix = hasTrailingSpace ? "" : (parts[1] ?? "");
 		const states = await listStates(cwd);
 		const matches = states
 			.filter((state) => state.name.toLowerCase().startsWith(completedPrefix.toLowerCase()))
 			.map((state) => ({
-				value: `ralph ${subcommand} ${state.name}`,
+				value: `${subcommand} ${state.name}`,
 				label: state.name,
 				description: `${state.status}, ${Math.min(state.currentIndex + 1, state.childIssues.length)}/${state.childIssues.length}`,
 			}));
 		return matches.length > 0 ? matches : null;
 	}
 
-	if (subcommand === "implement" && (parts.length === 2 || parts.length === 3)) {
+	if (subcommand === "implement" && (parts.length === 1 || parts.length === 2)) {
 		return [
-			{ value: "ralph implement #", label: "#<issue>", description: "Implement a GitHub issue or parent PRD issue" },
+			{ value: "implement #", label: "#<issue>", description: "Implement a GitHub issue or parent PRD issue" },
 			{
-				value: "ralph implement docs/prd/",
+				value: "implement docs/prd/",
 				label: "docs/prd/",
 				description: "Implement from a local PRD markdown file",
 			},
-			{ value: "ralph implement --max-iterations ", label: "--max-iterations", description: "Set a safety cap" },
+			{ value: "implement --max-iterations ", label: "--max-iterations", description: "Set a safety cap" },
 		];
 	}
 
 	return null;
 }
 
-async function handleMattCommand(pi: ExtensionAPI, args: string, ctx: ExtensionContext): Promise<void> {
+async function handleRalphCommand(pi: ExtensionAPI, args: string, ctx: ExtensionContext): Promise<void> {
 	const parts = splitArgs(args);
-	if (parts[0] !== "ralph") {
-		ctx.ui.notify("Usage: /matt ralph <implement|status|resume|stop|cancel|archive|clean|list>", "warning");
-		return;
-	}
-	const sub = parts[1];
-	if (sub === "implement") return implement(pi, parts.slice(2).join(" "), ctx);
+	const sub = parts[0];
+	if (sub === "implement") return implement(pi, parts.slice(1).join(" "), ctx);
 	if (sub === "status" || sub === "ls") return status(ctx);
 	if (sub === "list") return parts.includes("--archived") ? listArchived(ctx) : status(ctx);
-	if (sub === "resume") return resume(pi, parts.slice(2).join(" "), ctx);
+	if (sub === "resume") return resume(pi, parts.slice(1).join(" "), ctx);
 	if (sub === "stop") return stop(pi, ctx);
-	if (sub === "cancel") return cancel(pi, parts.slice(2).join(" "), ctx);
-	if (sub === "archive") return archive(pi, parts.slice(2).join(" "), ctx);
+	if (sub === "cancel") return cancel(pi, parts.slice(1).join(" "), ctx);
+	if (sub === "archive") return archive(pi, parts.slice(1).join(" "), ctx);
 	if (sub === "clean") return clean(parts.includes("--all"), ctx);
-	ctx.ui.notify("Usage: /matt ralph <implement|status|resume|stop|cancel|archive|clean|list>", "warning");
+	ctx.ui.notify("Usage: /ralph <implement|status|resume|stop|cancel|archive|clean|list>", "warning");
 }
 
 async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionContext): Promise<void> {
@@ -259,7 +246,7 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 	}
 	const targetArg = parsed.target;
 	if (!targetArg) {
-		ctx.ui.notify("Usage: /matt ralph implement <issue-or-prd> [--max-iterations N]", "warning");
+		ctx.ui.notify("Usage: /ralph implement <issue-or-prd> [--max-iterations N]", "warning");
 		return;
 	}
 
@@ -376,7 +363,7 @@ async function stop(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 async function cancel(pi: ExtensionAPI, sessionArg: string, ctx: ExtensionContext): Promise<void> {
 	const name = sessionArg.trim();
 	if (!name) {
-		ctx.ui.notify("Usage: /matt ralph cancel <session>", "warning");
+		ctx.ui.notify("Usage: /ralph cancel <session>", "warning");
 		return;
 	}
 	try {
@@ -394,7 +381,7 @@ async function cancel(pi: ExtensionAPI, sessionArg: string, ctx: ExtensionContex
 async function archive(pi: ExtensionAPI, sessionArg: string, ctx: ExtensionContext): Promise<void> {
 	const name = sessionArg.trim();
 	if (!name) {
-		ctx.ui.notify("Usage: /matt ralph archive <session>", "warning");
+		ctx.ui.notify("Usage: /ralph archive <session>", "warning");
 		return;
 	}
 	let state: MattRalphState;
