@@ -1,15 +1,15 @@
 {
-	"name": "@noid/pi-bar",
+	"name": "noid-ralph",
 	"version": "0.1.0",
 	"type": "module",
 	"exports": {
-		".": "./index.ts",
-		"./api": "./api.ts"
+		".": "./index.ts"
 	},
 	"pi": {
 		"extensions": ["./index.ts"]
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*"
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
 	}
 }

@@ -1,5 +1,5 @@
 {
-	"name": "@noid/pi-matt-ralph",
+	"name": "noid-skm",
 	"version": "0.1.0",
 	"type": "module",
 	"exports": {
@@ -7,6 +7,9 @@
 	},
 	"pi": {
 		"extensions": ["./index.ts"]
+	},
+	"dependencies": {
+		"noid-bar": "0.1.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

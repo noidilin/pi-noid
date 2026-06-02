@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { notifyBarChanged, registerBarModule } from "@noid/pi-bar/api";
+import { notifyBarChanged, registerBarModule } from "noid-bar/api";
 import { createSkillCatalog } from "./catalog";
 import { handleSkillManagerCommand } from "./commands";
 import { getSkillManagerCompletions } from "./completions";

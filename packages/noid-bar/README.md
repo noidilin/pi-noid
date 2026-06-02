@@ -38,7 +38,7 @@ Built-in components:
 ## Setup
 
 ```ts
-import { bar } from "@noid/pi-bar/api";
+import { bar } from "noid-bar/api";
 
 bar.setup({
   preset: "default",
@@ -67,7 +67,7 @@ Calling `bar.setup()` again replaces previous setup-provided extension component
 ## Presets
 
 ```ts
-import { bar } from "@noid/pi-bar/api";
+import { bar } from "noid-bar/api";
 
 bar.preset("minimal");
 // or
@@ -140,7 +140,7 @@ Separator object semantics:
 ## Custom components
 
 ```ts
-import { bar } from "@noid/pi-bar/api";
+import { bar } from "noid-bar/api";
 
 bar.component("clock", () => new Date().toLocaleTimeString());
 bar.component("slow", async () => {
@@ -202,7 +202,7 @@ export const myBar = {
 Use it:
 
 ```ts
-import { bar } from "@noid/pi-bar/api";
+import { bar } from "noid-bar/api";
 import { myBar } from "../my-extension";
 
 bar.setup({
@@ -218,7 +218,7 @@ bar.setup({
 Older status modules still work through `legacy.statuses`:
 
 ```ts
-import { notifyBarChanged, registerBarModule } from "@noid/pi-bar/api";
+import { notifyBarChanged, registerBarModule } from "noid-bar/api";
 
 let status = "ready";
 registerBarModule({ key: "example", priority: 20, render: () => status });

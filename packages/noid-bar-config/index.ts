@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { notifyBarChanged, registerBarComponent, setupBar } from "@noid/pi-bar/api";
+import { notifyBarChanged, registerBarComponent, setupBar } from "noid-bar/api";
 
 const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi");
 const SETTINGS_PATH = join(CONFIG_DIR, "settings.json");

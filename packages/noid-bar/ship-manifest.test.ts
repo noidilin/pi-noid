@@ -11,9 +11,9 @@ test("root Pi manifest loads each homemade extension once by entrypoint", () => 
 	};
 
 	assert.deepEqual(manifest.pi?.extensions, [
-		"./packages/bar/index.ts",
-		"./packages/skill-manager/index.ts",
-		"./packages/bar-config/index.ts",
-		"./packages/matt-ralph/index.ts",
+		"./packages/noid-bar/index.ts",
+		"./packages/noid-skm/index.ts",
+		"./packages/noid-bar-config/index.ts",
+		"./packages/noid-ralph/index.ts",
 	]);
 });

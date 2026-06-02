@@ -1,15 +1,13 @@
 {
-	"name": "@noid/pi-bar-config",
+	"name": "noid-bar",
 	"version": "0.1.0",
 	"type": "module",
 	"exports": {
-		".": "./index.ts"
+		".": "./index.ts",
+		"./api": "./api.ts"
 	},
 	"pi": {
 		"extensions": ["./index.ts"]
-	},
-	"dependencies": {
-		"@noid/pi-bar": "0.1.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
