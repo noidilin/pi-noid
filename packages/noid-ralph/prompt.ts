@@ -62,6 +62,7 @@ Workflow instructions:
 5. Use test-first discipline where appropriate: red → green → refactor, behavior through public interfaces.
 6. Run project checks/tests that validate the change.
 7. Create at least one local git commit for this target. Never push.
+   - Use Conventional Commits for the commit subject, e.g. feat: add ralph command or fix: handle empty status.
    - Standalone issue body footer: Refs #<issue>
    - Child issue body footer: Part of #<parent> and Refs #<child>
 8. Update ${state.taskFile} with progress, validation, commit hash, and open questions.
