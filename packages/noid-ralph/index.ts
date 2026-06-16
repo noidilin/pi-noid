@@ -3,11 +3,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import type { FinalizeIssueResult } from "./github";
 import {
 	dirtyStatus,
+	dirtyStatusExcludingRalph,
 	discoverChildren,
 	extractParentFromBody,
+	finalizeIssue,
 	hasCommand,
 	isGitRepo,
 	parseIssueNumber,
@@ -29,6 +33,7 @@ import {
 	taskPathFor,
 	writeState,
 } from "./loop-store";
+import { orchestrate } from "./orchestrate";
 import {
 	buildFinalPrompt,
 	buildKickoffPrompt,
@@ -44,8 +49,10 @@ export default function mattRalphExtension(pi: ExtensionAPI) {
 	let currentCwd = process.cwd();
 
 	pi.registerCommand("ralph", {
-		description: "Matt Pocock-style workflows. Use: /ralph <implement|status|resume|stop|cancel|archive|clean|list>",
-		argumentHint: "implement <issue-or-prd> [--max-iterations N] | status | resume <session> | stop",
+		description:
+			"Matt Pocock-style workflows. Use: /ralph <implement|orchestrate|status|resume|stop|cancel|archive|clean|list>",
+		argumentHint:
+			"implement <issue-or-prd> [--max-iterations N] | orchestrate <plan|start|status|resume|stop> | status | resume <session> | stop",
 		getArgumentCompletions: async (argumentPrefix: string) => getRalphCompletions(argumentPrefix, currentCwd),
 		handler: async (args: string, ctx: ExtensionContext) => {
 			currentCwd = ctx.cwd;
@@ -142,13 +149,18 @@ export default function mattRalphExtension(pi: ExtensionAPI) {
 		if (!text.includes("MATT_RALPH_COMPLETE")) return;
 		const state = await getActiveState(ctx.cwd);
 		if (!state) return;
+		const finalization = await finalizeGithubIssues(pi, ctx, state);
 		state.status = "completed";
 		state.completedAt = new Date().toISOString();
 		await writeState(ctx.cwd, state);
 		await setActiveSession(ctx.cwd, undefined);
 		updateMattRalphUI(ctx, undefined);
-		emitMattEvent(pi, "matt_ralph:complete", { name: state.name, iteration: state.iteration });
-		ctx.ui.notify(`Matt Ralph completed: ${state.name}`, "info");
+		emitMattEvent(pi, "matt_ralph:complete", { name: state.name, iteration: state.iteration, finalization });
+		ctx.ui.notify(
+			formatCompletionNotice(state.name, finalization),
+			finalization.failed.length > 0 ? "warning" : "info",
+		);
+		if (state.exitOnComplete) (ctx as { shutdown?: () => void }).shutdown?.();
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -170,6 +182,13 @@ async function getRalphCompletions(argumentPrefix: string, cwd: string): Promise
 			label: "implement --max-iterations",
 			description: "Start with a safety iteration cap",
 		},
+		{ value: "orchestrate plan #", label: "orchestrate plan", description: "Plan a parent issue orchestration" },
+		{
+			value: "orchestrate start #",
+			label: "orchestrate start",
+			description: "Run child issues sequentially in herdr",
+		},
+		{ value: "orchestrate status", label: "orchestrate status", description: "List Ralph orchestrations" },
 		{ value: "status", label: "status", description: "List Matt Ralph sessions in .ralph/" },
 		{ value: "list", label: "list", description: "Alias for status" },
 		{
@@ -228,6 +247,7 @@ async function handleRalphCommand(pi: ExtensionAPI, args: string, ctx: Extension
 	const parts = splitArgs(args);
 	const sub = parts[0];
 	if (sub === "implement") return implement(pi, parts.slice(1).join(" "), ctx);
+	if (sub === "orchestrate") return orchestrate(pi, parts.slice(1), ctx);
 	if (sub === "status" || sub === "ls") return status(ctx);
 	if (sub === "list") return parts.includes("--archived") ? listArchived(ctx) : status(ctx);
 	if (sub === "resume") return resume(pi, parts.slice(1).join(" "), ctx);
@@ -246,7 +266,10 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 	}
 	const targetArg = parsed.target;
 	if (!targetArg) {
-		ctx.ui.notify("Usage: /ralph implement <issue-or-prd> [--max-iterations N]", "warning");
+		ctx.ui.notify(
+			"Usage: /ralph implement <issue-or-prd> [--max-iterations N] [--exit-on-complete] [--session-suffix suffix]",
+			"warning",
+		);
 		return;
 	}
 
@@ -261,7 +284,9 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 		return;
 	}
 
-	const initialDirtyStatus = await dirtyStatus(pi, ctx.cwd);
+	const rawDirtyStatus = await dirtyStatus(pi, ctx.cwd);
+	const initialDirtyStatus = parsed.ignoreRalphDirty ? await dirtyStatusExcludingRalph(pi, ctx.cwd) : rawDirtyStatus;
+	const ignoredDirtyStatus = parsed.ignoreRalphDirty ? ralphOnlyDirtyStatus(rawDirtyStatus) : undefined;
 	if (initialDirtyStatus && ctx.hasUI) {
 		const proceed = await ctx.ui.confirm(
 			"Dirty worktree",
@@ -274,7 +299,8 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 	for (const warning of warnings) ctx.ui.notify(warning, "warning");
 
 	const { parentIssue, children } = await resolveTargets(pi, ctx.cwd, target);
-	const name = `implement-${sanitizeSessionName(targetArg)}`;
+	const baseName = `implement-${sanitizeSessionName(targetArg)}`;
+	const name = parsed.sessionSuffix ? `${baseName}-${sanitizeSessionName(parsed.sessionSuffix)}` : baseName;
 	const taskFileAbs = taskPathFor(ctx.cwd, name);
 	const taskFileRel = path.relative(ctx.cwd, taskFileAbs);
 	const state: MattRalphState = {
@@ -289,8 +315,11 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 		iteration: 1,
 		startedAt: new Date().toISOString(),
 		initialDirtyStatus,
+		ignoredDirtyStatus,
 		warnings,
 		maxIterations: parsed.maxIterations,
+		exitOnComplete: parsed.exitOnComplete,
+		sessionSuffix: parsed.sessionSuffix,
 	};
 
 	await ensureStore(ctx.cwd);
@@ -435,10 +464,10 @@ async function resolveTargets(
 
 	const issue = await viewIssue(pi, cwd, target.number);
 	const title = issue?.title ?? `Issue #${target.number}`;
-	const parentFromBody = extractParentFromBody(issue?.body);
-	if (parentFromBody) {
+	const parentIssue = issue?.parent?.number ?? extractParentFromBody(issue?.body);
+	if (parentIssue) {
 		return {
-			parentIssue: parentFromBody,
+			parentIssue,
 			children: [{ number: target.number, title, state: issue?.state, source: "standalone" }],
 		};
 	}
@@ -481,34 +510,163 @@ function formatStateLine(state: MattRalphState): string {
 }
 
 function updateMattRalphUI(ctx: ExtensionContext, state: MattRalphState | undefined): void {
-	if (state?.status !== "active") {
+	const ui = ctx.ui as {
+		theme?: { fg?: (color: string, text: string) => string };
+		setWidget?: (key: string, widget?: unknown, options?: { placement?: "aboveEditor" | "belowEditor" }) => void;
+	};
+	if (state?.status !== "active" || !Array.isArray(state.childIssues)) {
 		ctx.ui.setStatus("matt-ralph", undefined);
-		(
-			ctx.ui as { setWidget?: (key: string, lines?: string[], placement?: "aboveEditor" | "belowEditor") => void }
-		).setWidget?.("matt-ralph", undefined);
+		ui.setWidget?.("matt-ralph", undefined);
 		return;
 	}
-	const target = state.childIssues[state.currentIndex];
 	const progress = `${Math.min(state.currentIndex + 1, state.childIssues.length)}/${state.childIssues.length}`;
-	ctx.ui.setStatus(
-		"matt-ralph",
-		`matt: ${progress}${state.maxIterations ? ` (${state.iteration}/${state.maxIterations})` : ""}`,
-	);
-	(
-		ctx.ui as { setWidget?: (key: string, lines?: string[], placement?: "aboveEditor" | "belowEditor") => void }
-	).setWidget?.("matt-ralph", [
-		"Matt Ralph",
-		`Session: ${state.name}`,
-		`Status: ${state.status}`,
-		`Target: ${progress} ${target ? formatTargetLabel(target) : "<final verification>"}`,
-		`Iteration: ${state.maxIterations ? `${state.iteration}/${state.maxIterations}` : state.iteration}`,
-		`Notes: ${state.taskFile}`,
-		"Policy: local commits only; ask before tracker mutation",
-	]);
+	ctx.ui.setStatus("matt-ralph", `matt ● ${progress} i${formatIteration(state)}`);
+	ui.setWidget?.("matt-ralph", (_tui: unknown, theme: RalphTheme) => createRalphCard(state, theme), {
+		placement: "aboveEditor",
+	});
+}
+
+type RalphTheme = {
+	fg(color: string, text: string): string;
+	bold?(text: string): string;
+};
+
+function createRalphCard(state: MattRalphState, theme: RalphTheme) {
+	return {
+		render(width: number): string[] {
+			const cardWidth = Math.min(width, 72);
+			if (cardWidth < 4) return [];
+			const innerWidth = Math.max(0, cardWidth - 4);
+			const target = state.childIssues[state.currentIndex];
+			const progress = `${Math.min(state.currentIndex + 1, state.childIssues.length)}/${state.childIssues.length}`;
+			const warningCount = state.warnings?.length ?? 0;
+			const badges = [
+				warningCount > 0 ? theme.fg("warning", `⚠${warningCount}`) : undefined,
+				state.initialDirtyStatus ? theme.fg("warning", "dirty") : undefined,
+			]
+				.filter(Boolean)
+				.join(" ");
+			const status = theme.fg("success", "● active");
+			const rows = [
+				`${status}  target ${progress}  iter ${formatIteration(state)}${badges ? `  ${badges}` : ""}`,
+				`Now: ${target ? formatTargetLabel(target) : "<final verification>"}`,
+				`Next: ${formatUpcomingTargets(state)}`,
+				`Notes: ${state.taskFile}`,
+				"Policy: local commit · never push · GH finalizes",
+				"Hints: stop · status · archive",
+			];
+			return [
+				cardBorder("top", cardWidth, theme, "Matt Ralph"),
+				...rows.map((row) => cardRow(row, innerWidth, theme)),
+				cardBorder("bottom", cardWidth, theme),
+			];
+		},
+		invalidate(): void {},
+	};
+}
+
+function formatUpcomingTargets(state: MattRalphState): string {
+	const upcoming = state.childIssues
+		.slice(state.currentIndex + 1)
+		.map((issue) => (issue.number > 0 ? `#${issue.number}` : issue.title));
+	if (upcoming.length === 0) return "<final verification>";
+	return upcoming.join(" ");
+}
+
+function formatIteration(state: MattRalphState): string {
+	return state.maxIterations ? `${state.iteration}/${state.maxIterations}` : `${state.iteration}`;
+}
+
+function cardBorder(kind: "top" | "bottom", width: number, theme: RalphTheme, title?: string): string {
+	if (width < 4) return theme.fg("accent", "─".repeat(width));
+	if (kind === "bottom") return theme.fg("accent", `╰${"─".repeat(width - 2)}╯`);
+	const label = title ? `─ ${title} ` : "";
+	return theme.fg("accent", `╭${label}${"─".repeat(Math.max(0, width - visibleWidth(label) - 2))}╮`);
+}
+
+function cardRow(text: string, innerWidth: number, theme: RalphTheme): string {
+	const content = padVisible(truncateToWidth(text, innerWidth, "…"), innerWidth);
+	return `${theme.fg("accent", "│")} ${content} ${theme.fg("accent", "│")}`;
+}
+
+function padVisible(text: string, width: number): string {
+	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 }
 
 function emitMattEvent(pi: ExtensionAPI, name: string, payload: Record<string, unknown>): void {
 	pi.events.emit(name, payload);
+}
+
+type FinalizationSummary = {
+	succeeded: FinalizeIssueResult[];
+	failed: FinalizeIssueResult[];
+	skipped: string[];
+};
+
+async function finalizeGithubIssues(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	state: MattRalphState,
+): Promise<FinalizationSummary> {
+	const issueNumbers = githubIssueNumbersFor(state);
+	if (issueNumbers.length === 0) {
+		const skipped = ["No GitHub issue targets in this session."];
+		await appendTaskNote(ctx.cwd, state, finalizationNote([], [], skipped));
+		return { succeeded: [], failed: [], skipped };
+	}
+	if (!(await hasCommand(pi, "gh", ctx.cwd))) {
+		const skipped = ["gh is not available; skipped final GitHub issue comment/close."];
+		await appendTaskNote(ctx.cwd, state, finalizationNote([], [], skipped));
+		return { succeeded: [], failed: [], skipped };
+	}
+
+	const results: FinalizeIssueResult[] = [];
+	for (const issue of issueNumbers) results.push(await finalizeIssue(pi, ctx.cwd, issue));
+	const succeeded = results.filter((result) => result.commented && result.closed);
+	const failed = results.filter((result) => !result.commented || !result.closed);
+	await appendTaskNote(ctx.cwd, state, finalizationNote(succeeded, failed, []));
+	return { succeeded, failed, skipped: [] };
+}
+
+function githubIssueNumbersFor(state: MattRalphState): number[] {
+	const issues = state.childIssues.map((issue) => issue.number).filter((issue) => issue > 0);
+	const rootIssue = parseIssueNumber(state.rootIssue);
+	if (state.parentIssue && rootIssue === state.parentIssue) issues.push(state.parentIssue);
+	return [...new Set(issues)];
+}
+
+function finalizationNote(succeeded: FinalizeIssueResult[], failed: FinalizeIssueResult[], skipped: string[]): string {
+	const lines = ["", "", "## GitHub finalization", "", `Completed at ${new Date().toISOString()}.`, ""];
+	if (succeeded.length > 0) {
+		lines.push("### Commented and closed", "", ...succeeded.map((result) => `- #${result.issue}`), "");
+	}
+	if (failed.length > 0) {
+		lines.push(
+			"### Failed",
+			"",
+			...failed.map(
+				(result) =>
+					`- #${result.issue}: commented=${result.commented}, closed=${result.closed}${result.error ? `, error=${result.error}` : ""}`,
+			),
+			"",
+		);
+	}
+	if (skipped.length > 0) lines.push("### Skipped", "", ...skipped.map((reason) => `- ${reason}`), "");
+	return lines.join("\n");
+}
+
+function formatCompletionNotice(name: string, finalization: FinalizationSummary): string {
+	const pieces = [`Matt Ralph completed: ${name}`];
+	if (finalization.succeeded.length > 0) {
+		pieces.push(`commented/closed ${finalization.succeeded.map((result) => `#${result.issue}`).join(", ")}`);
+	}
+	if (finalization.failed.length > 0) {
+		pieces.push(
+			`GitHub finalization failed for ${finalization.failed.map((result) => `#${result.issue}`).join(", ")}`,
+		);
+	}
+	if (finalization.skipped.length > 0) pieces.push(finalization.skipped.join(" "));
+	return pieces.join("; ");
 }
 
 function eventPayload(state: MattRalphState): Record<string, unknown> {
@@ -525,24 +683,59 @@ function formatTargetLabel(target: ChildIssue): string {
 	return target.number > 0 ? `#${target.number} ${target.title}` : target.title;
 }
 
-function parseImplementArgs(raw: string): { target: string; maxIterations?: number; error?: string } {
+function parseImplementArgs(raw: string): {
+	target: string;
+	maxIterations?: number;
+	exitOnComplete?: boolean;
+	sessionSuffix?: string;
+	ignoreRalphDirty?: boolean;
+	error?: string;
+} {
 	const parts = splitArgs(raw);
 	let maxIterations: number | undefined;
+	let exitOnComplete = false;
+	let sessionSuffix: string | undefined;
+	let ignoreRalphDirty = false;
 	const targetParts: string[] = [];
 	for (let index = 0; index < parts.length; index += 1) {
 		const part = parts[index];
-		if (part !== "--max-iterations") {
-			targetParts.push(part);
+		if (part === "--max-iterations") {
+			const value = parts[index + 1];
+			if (!value || !/^\d+$/.test(value))
+				return { target: targetParts.join(" "), error: "--max-iterations requires a positive integer." };
+			maxIterations = Number(value);
+			if (maxIterations < 1) return { target: targetParts.join(" "), error: "--max-iterations must be at least 1." };
+			index += 1;
 			continue;
 		}
-		const value = parts[index + 1];
-		if (!value || !/^\d+$/.test(value))
-			return { target: targetParts.join(" "), error: "--max-iterations requires a positive integer." };
-		maxIterations = Number(value);
-		if (maxIterations < 1) return { target: targetParts.join(" "), error: "--max-iterations must be at least 1." };
-		index += 1;
+		if (part === "--exit-on-complete") {
+			exitOnComplete = true;
+			continue;
+		}
+		if (part === "--session-suffix") {
+			const value = parts[index + 1];
+			if (!value || value.startsWith("--"))
+				return { target: targetParts.join(" "), error: "--session-suffix requires a value." };
+			sessionSuffix = sanitizeSessionName(value);
+			index += 1;
+			continue;
+		}
+		if (part === "--ignore-ralph-dirty") {
+			ignoreRalphDirty = true;
+			continue;
+		}
+		if (part.startsWith("--")) return { target: targetParts.join(" "), error: `Unknown implement flag: ${part}` };
+		targetParts.push(part);
 	}
-	return { target: targetParts.join(" "), maxIterations };
+	return { target: targetParts.join(" "), maxIterations, exitOnComplete, sessionSuffix, ignoreRalphDirty };
+}
+
+function ralphOnlyDirtyStatus(status: string): string | undefined {
+	const ralphLines = status
+		.split("\n")
+		.map((line) => line.trimEnd())
+		.filter((line) => line.length > 0 && line.slice(3).startsWith(".ralph/"));
+	return ralphLines.length > 0 ? ralphLines.join("\n") : undefined;
 }
 
 function initialTaskFile(state: MattRalphState): string {
@@ -550,7 +743,7 @@ function initialTaskFile(state: MattRalphState): string {
 		const label = issue.number > 0 ? `#${issue.number} ${issue.title}` : issue.title;
 		return `${index + 1}. ${label} (${issue.source}, ${issue.state ?? "unknown"})`;
 	});
-	return `# Matt Ralph Session: ${state.name}\n\nStarted: ${state.startedAt}\nMode: ${state.mode}\nRoot input: ${state.rootIssue}\nParent issue: ${state.parentIssue ? `#${state.parentIssue}` : "<none>"}\nMax iterations: ${state.maxIterations ?? "<none>"}\n\n## Targets\n\n${targetLines.join("\n")}\n\n## Preflight\n\n### Initial dirty status\n\n\`\`\`\n${state.initialDirtyStatus || ""}\n\`\`\`\n\n### Warnings\n\n${(state.warnings ?? []).map((warning) => `- ${warning}`).join("\n") || "- <none>"}\n\n## Progress\n`;
+	return `# Matt Ralph Session: ${state.name}\n\nStarted: ${state.startedAt}\nMode: ${state.mode}\nRoot input: ${state.rootIssue}\nParent issue: ${state.parentIssue ? `#${state.parentIssue}` : "<none>"}\nMax iterations: ${state.maxIterations ?? "<none>"}\n\n## Targets\n\n${targetLines.join("\n")}\n\n## Preflight\n\n### Initial dirty status\n\n\`\`\`\n${state.initialDirtyStatus || ""}\n\`\`\`\n\n### Ignored .ralph dirty status\n\n\`\`\`\n${state.ignoredDirtyStatus || ""}\n\`\`\`\n\n### Warnings\n\n${(state.warnings ?? []).map((warning) => `- ${warning}`).join("\n") || "- <none>"}\n\n## Progress\n`;
 }
 
 function splitArgs(args: string): string[] {

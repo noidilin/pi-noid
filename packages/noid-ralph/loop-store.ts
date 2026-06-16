@@ -83,7 +83,8 @@ export async function listStates(cwd: string): Promise<MattRalphState[]> {
 	const states: MattRalphState[] = [];
 	for (const file of files.filter((name) => name.endsWith(".state.json"))) {
 		try {
-			states.push(JSON.parse(await readFile(path.join(dir, file), "utf8")) as MattRalphState);
+			const state = JSON.parse(await readFile(path.join(dir, file), "utf8")) as unknown;
+			if (isMattRalphState(state)) states.push(state);
 		} catch {
 			// Ignore malformed session files in status output.
 		}
@@ -98,7 +99,8 @@ export async function listArchivedStates(cwd: string): Promise<MattRalphState[]>
 	const states: MattRalphState[] = [];
 	for (const file of files.filter((name) => name.endsWith(".state.json"))) {
 		try {
-			states.push(JSON.parse(await readFile(path.join(dir, file), "utf8")) as MattRalphState);
+			const state = JSON.parse(await readFile(path.join(dir, file), "utf8")) as unknown;
+			if (isMattRalphState(state)) states.push(state);
 		} catch {
 			// Ignore malformed archived session files.
 		}
@@ -135,4 +137,10 @@ export async function appendTaskNote(cwd: string, state: MattRalphState, note: s
 	const file = path.isAbsolute(state.taskFile) ? state.taskFile : path.join(cwd, state.taskFile);
 	const current = existsSync(file) ? await readFile(file, "utf8") : "";
 	await writeFile(file, current + note, "utf8");
+}
+
+function isMattRalphState(value: unknown): value is MattRalphState {
+	if (!value || typeof value !== "object") return false;
+	const state = value as Partial<MattRalphState>;
+	return state.mode === "implement" && typeof state.name === "string" && Array.isArray(state.childIssues);
 }

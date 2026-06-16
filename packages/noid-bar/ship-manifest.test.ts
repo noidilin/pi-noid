@@ -15,5 +15,6 @@ test("root Pi manifest loads each homemade extension once by entrypoint", () => 
 		"./packages/noid-skm/index.ts",
 		"./packages/noid-bar-config/index.ts",
 		"./packages/noid-ralph/index.ts",
+		"./packages/noid-alive/index.ts",
 	]);
 });

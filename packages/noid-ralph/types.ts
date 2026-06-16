@@ -20,10 +20,14 @@ export type MattRalphState = {
 	startedAt: string;
 	completedAt?: string;
 	maxIterations?: number;
+	exitOnComplete?: boolean;
+	sessionSuffix?: string;
+	orchestratorName?: string;
 	archivedAt?: string;
 	lastAdvancedAt?: string;
 	lastResumedAt?: string;
 	initialDirtyStatus?: string;
+	ignoredDirtyStatus?: string;
 	warnings?: string[];
 };
 
@@ -33,6 +37,12 @@ export type IssueMetadata = {
 	state?: "open" | "closed";
 	body?: string;
 	url?: string;
+	parent?: {
+		number: number;
+		title?: string;
+		state?: "open" | "closed";
+		url?: string;
+	};
 };
 
 export type TargetDescriptor =

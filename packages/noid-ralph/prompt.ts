@@ -26,7 +26,7 @@ Do this now:
 - Run the appropriate project checks/tests if they have not just passed.
 - Ensure each target has a local commit. Never push.
 - Update ${state.taskFile} with final results and any follow-up notes.
-- Ask before closing/commenting on GitHub issues; do not silently mutate the tracker.
+- Do not close/comment on GitHub issues yourself; after you emit the completion marker, the Ralph extension comments "Final verification" and closes GitHub issue targets automatically.
 - If everything is complete, respond with exactly this marker in your final assistant message: MATT_RALPH_COMPLETE
 - If more work remains, explain what remains and continue without emitting the marker.`;
 }
@@ -41,7 +41,7 @@ export function buildSystemInjection(state: MattRalphState): string {
 - Current target: ${formatTarget(target)}
 - Scope: implement only the current target unless explicitly asked otherwise.
 - When this target is implemented, tested, committed locally, and ${state.taskFile} is updated, call matt_ralph_done unless all targets are done; final completion marker is MATT_RALPH_COMPLETE.
-- Ask before closing or commenting on tracker issues. Never push.`;
+- Do not close/comment on tracker issues yourself during final completion; the Ralph extension handles GitHub finalization after MATT_RALPH_COMPLETE. Never push.`;
 }
 
 function buildIterationPrompt(state: MattRalphState, phase: "start" | "resume" | "next"): string {
@@ -66,7 +66,7 @@ Workflow instructions:
    - Standalone issue body footer: Refs #<issue>
    - Child issue body footer: Part of #<parent> and Refs #<child>
 8. Update ${state.taskFile} with progress, validation, commit hash, and open questions.
-9. Ask before closing/commenting on GitHub issues; do not silently mutate the tracker.
+9. Ask before closing/commenting on GitHub issues during normal iterations; final completion is automatic after MATT_RALPH_COMPLETE.
 10. When this iteration is complete, call matt_ralph_done. If all targets are complete after final verification, emit MATT_RALPH_COMPLETE instead.
 
 Initial dirty worktree recorded by preflight:
