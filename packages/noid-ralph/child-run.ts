@@ -2,7 +2,12 @@ import { chmod, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isIssueClosed } from "./github";
-import { readPane, runInPane, waitOutput } from "./herdr-runner";
+import {
+	createChildRalphWorkerScript,
+	type HerdrWorkerRunResult,
+	type HerdrWorkerRunSpec,
+	runWorkerScriptInPane,
+} from "./herdr-runner";
 import { listStates, ralphDir, sanitizeSessionName } from "./loop-store";
 import type { MattRalphState } from "./types";
 
@@ -63,9 +68,7 @@ export type ChildRunAdapters = {
 	now(): string;
 	git(args: string[]): Promise<string>;
 	writeWorkerScript(file: string, content: string): Promise<void>;
-	runInPane(paneId: string, command: string): Promise<void>;
-	waitOutput(paneId: string, match: string, timeoutMs: number): Promise<boolean>;
-	readPane(paneId: string, lines: number): Promise<string>;
+	runWorkerScript(spec: HerdrWorkerRunSpec): Promise<HerdrWorkerRunResult>;
 	findRalphSession(sessionName: string): Promise<MattRalphState | undefined>;
 	isIssueClosed(issue: number): Promise<boolean>;
 };
@@ -78,9 +81,7 @@ export function createChildRunAdapters(pi: ExtensionAPI, cwd: string): ChildRunA
 			await writeFile(file, content, "utf8");
 			await chmod(file, 0o755);
 		},
-		runInPane: (paneId, command) => runInPane(pi, cwd, paneId, command),
-		waitOutput: (paneId, match, timeoutMs) => waitOutput(pi, cwd, paneId, match, timeoutMs),
-		readPane: (paneId, lines) => readPane(pi, cwd, paneId, lines),
+		runWorkerScript: (spec) => runWorkerScriptInPane(pi, cwd, spec),
 		findRalphSession: (sessionName) => findRalphSession(cwd, sessionName),
 		isIssueClosed: (issue) => isIssueClosed(pi, cwd, issue),
 	};
@@ -110,26 +111,31 @@ export async function runChildIssue(
 			facts: { startedAt: facts.startedAt, headBefore: facts.headBefore, sessionName: facts.sessionName },
 		});
 
-		const sentinel = `${input.orchestrationName}-${input.issue}-${Date.now()}`;
 		const workerPrompt = `/ralph implement #${input.issue} --exit-on-complete --ignore-ralph-dirty --session-suffix ${suffix}`;
+		const worker = createChildRalphWorkerScript({ issue: input.issue, prompt: workerPrompt });
 		const workerScript = path.join(ralphDir(input.cwd), `${input.orchestrationName}-issue-${input.issue}.worker.sh`);
 		facts.workerScript = path.relative(input.cwd, workerScript);
-		await adapters.writeWorkerScript(workerScript, workerScriptContent(input.issue, workerPrompt, sentinel));
+		await adapters.writeWorkerScript(workerScript, worker.content);
 		await emit({ type: "workerScriptWritten", facts: { workerScript: facts.workerScript } });
 
-		facts.workerLaunchedAt = adapters.now();
-		await adapters.runInPane(input.paneId, `sh ${shellQuote(workerScript)}`);
-		await emit({ type: "workerLaunched", facts: { workerLaunchedAt: facts.workerLaunchedAt } });
-
-		const exited = await adapters.waitOutput(input.paneId, `sentinel=${sentinel}`, input.issueTimeoutMs);
+		const workerRun = await adapters.runWorkerScript({
+			paneId: input.paneId,
+			scriptPath: workerScript,
+			sentinel: worker.sentinel,
+			timeoutMs: input.issueTimeoutMs,
+			onLaunched: async () => {
+				facts.workerLaunchedAt = adapters.now();
+				await emit({ type: "workerLaunched", facts: { workerLaunchedAt: facts.workerLaunchedAt } });
+			},
+		});
 		facts.workerExitedAt = adapters.now();
-		diagnostics.paneTail = await adapters.readPane(input.paneId, 80);
-		facts.workerExitCode = parseWorkerExitCode(diagnostics.paneTail, sentinel) ?? undefined;
+		diagnostics.paneTail = workerRun.tail;
+		facts.workerExitCode = workerRun.exitCode;
 		await emit({
 			type: "workerExited",
 			facts: { workerExitedAt: facts.workerExitedAt, workerExitCode: facts.workerExitCode },
 		});
-		if (!exited) return fail("Worker timed out before sentinel.");
+		if (!workerRun.exited) return fail("Worker timed out before sentinel.");
 
 		const childState = await adapters.findRalphSession(facts.sessionName);
 		diagnostics.childStatus = childState?.status;
@@ -164,24 +170,7 @@ export async function runChildIssue(
 		});
 		return { ok: true, facts: facts as ChildRunFacts };
 	} catch (error) {
-		if (!diagnostics.paneTail) diagnostics.paneTail = await safeReadPane(adapters, input.paneId);
 		return fail(error instanceof Error ? error.message : String(error));
-	}
-}
-
-export function parseWorkerExitCode(paneTail: string, sentinel: string): number | undefined {
-	const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const match = paneTail.match(
-		new RegExp(`RALPH_WORKER_EXIT\\s+issue=\\d+\\s+code=(\\d+)\\s+sentinel=${escapedSentinel}`),
-	);
-	return match ? Number(match[1]) : undefined;
-}
-
-async function safeReadPane(adapters: ChildRunAdapters, paneId: string): Promise<string | undefined> {
-	try {
-		return await adapters.readPane(paneId, 80);
-	} catch {
-		return undefined;
 	}
 }
 
@@ -194,18 +183,4 @@ async function git(pi: ExtensionAPI, cwd: string, args: string[]): Promise<strin
 async function findRalphSession(cwd: string, sessionName: string): Promise<MattRalphState | undefined> {
 	const states = await listStates(cwd);
 	return states.find((state) => state.name === sessionName);
-}
-
-function workerScriptContent(issue: number, workerPrompt: string, sentinel: string): string {
-	return `#!/bin/sh
-printf '\n[ralph-orchestrator] starting issue #${issue}\n'
-pi --name ${shellQuote(`ralph #${issue}`)} ${shellQuote(workerPrompt)}
-code=$?
-printf '\nRALPH_WORKER_EXIT issue=${issue} code=%s sentinel=${sentinel}\n' "$code"
-exit "$code"
-`;
-}
-
-function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", "'\\''")}'`;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type ChildRunAdapters, type ChildRunProgress, parseWorkerExitCode, runChildIssue } from "./child-run";
+import { type ChildRunAdapters, type ChildRunProgress, runChildIssue } from "./child-run";
+import type { HerdrWorkerRunSpec } from "./herdr-runner";
 import type { MattRalphState } from "./types";
 
 const input = {
@@ -13,17 +14,19 @@ const input = {
 };
 
 type AdapterOptions = {
-	waitOutput?: boolean;
+	workerExited?: boolean;
 	childState?: Partial<MattRalphState>;
 	issueClosed?: boolean;
 	commits?: string;
 };
 
-function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & { scripts: string[]; commands: string[] } {
+function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & {
+	scripts: string[];
+	workerRuns: HerdrWorkerRunSpec[];
+} {
 	let revParseCount = 0;
-	let sentinel = "missing";
 	const scripts: string[] = [];
-	const commands: string[] = [];
+	const workerRuns: HerdrWorkerRunSpec[] = [];
 	const childState: MattRalphState = {
 		name: "placeholder",
 		taskFile: ".ralph/placeholder.md",
@@ -39,7 +42,7 @@ function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & { scri
 	};
 	return {
 		scripts,
-		commands,
+		workerRuns,
 		now: (() => {
 			let tick = 0;
 			return () => `2026-01-01T00:00:0${tick++}.000Z`;
@@ -52,14 +55,15 @@ function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & { scri
 		writeWorkerScript: async (_file, content) => {
 			scripts.push(content);
 		},
-		runInPane: async (_paneId, command) => {
-			commands.push(command);
+		runWorkerScript: async (spec) => {
+			workerRuns.push(spec);
+			await spec.onLaunched?.();
+			return {
+				exited: options.workerExited ?? true,
+				exitCode: 0,
+				tail: `some output\nRALPH_WORKER_EXIT issue=34 code=0 sentinel=${spec.sentinel}\n`,
+			};
 		},
-		waitOutput: async (_paneId, match) => {
-			sentinel = match.replace(/^sentinel=/, "");
-			return options.waitOutput ?? true;
-		},
-		readPane: async () => `some output\nRALPH_WORKER_EXIT issue=34 code=0 sentinel=${sentinel}\n`,
 		findRalphSession: async (sessionName) => ({ ...childState, name: sessionName }),
 		isIssueClosed: async () => options.issueClosed ?? true,
 	};
@@ -93,11 +97,15 @@ describe("child run", () => {
 		expect(adapters.scripts[0]).toContain(
 			"/ralph implement #34 --exit-on-complete --ignore-ralph-dirty --session-suffix orchestrate-issue-42-abc123-1-issue-34",
 		);
-		expect(adapters.commands[0]).toContain("orchestrate-issue-42-abc123-issue-34.worker.sh");
+		expect(adapters.workerRuns[0]).toMatchObject({
+			paneId: "pane-1",
+			scriptPath: "/repo/.ralph/orchestrate-issue-42-abc123-issue-34.worker.sh",
+			timeoutMs: 120_000,
+		});
 	});
 
 	it("returns a failed outcome when the worker times out", async () => {
-		const outcome = await runChildIssue(input, createAdapters({ waitOutput: false }));
+		const outcome = await runChildIssue(input, createAdapters({ workerExited: false }));
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected failure");
@@ -128,9 +136,5 @@ describe("child run", () => {
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected failure");
 		expect(outcome.reason).toBe("No commits were produced for child issue.");
-	});
-
-	it("parses worker exit codes from pane output", () => {
-		expect(parseWorkerExitCode("RALPH_WORKER_EXIT issue=34 code=7 sentinel=a.b?c", "a.b?c")).toBe(7);
 	});
 });

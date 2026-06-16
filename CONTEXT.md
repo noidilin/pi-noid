@@ -19,3 +19,7 @@ _Avoid_: worker agent, child service, implementation component
 **Child run**:
 One parent-orchestration attempt to execute and verify a single child Ralph session, including session identity, herdr launch, child completion evidence, GitHub closure, commit range, progress facts, and diagnostics.
 _Avoid_: worker step, issue job, child task
+
+**Herdr worker adapter**:
+The Ralph module that hides herdr CLI calls, worker-pane shell launch, sentinel matching, exit-code parsing, and pane-tail diagnostics behind one interface.
+_Avoid_: pane helper collection, shell wrapper, output parser
