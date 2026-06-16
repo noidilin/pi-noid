@@ -1,3 +1,5 @@
+export const MATT_RALPH_SCHEMA_VERSION = 2;
+
 export type IssueSource = "native" | "parent-section" | "standalone";
 
 export type ChildIssue = {
@@ -7,7 +9,16 @@ export type ChildIssue = {
 	source: IssueSource;
 };
 
+export type OrchestrationChildLink = {
+	orchestrationName: string;
+	parentIssue: number;
+	childIssue: number;
+	issueRunIndex: number;
+	parentStatePath: string;
+};
+
 export type MattRalphState = {
+	schemaVersion: typeof MATT_RALPH_SCHEMA_VERSION;
 	name: string;
 	taskFile: string;
 	status: "active" | "paused" | "completed";
@@ -23,6 +34,7 @@ export type MattRalphState = {
 	exitOnComplete?: boolean;
 	sessionSuffix?: string;
 	orchestratorName?: string;
+	orchestrationChildLink?: OrchestrationChildLink;
 	archivedAt?: string;
 	lastAdvancedAt?: string;
 	lastResumedAt?: string;

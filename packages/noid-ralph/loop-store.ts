@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { MattRalphState } from "./types";
+import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
 const ACTIVE_FILE = "active-session";
 
@@ -42,12 +42,16 @@ export async function ensureStore(cwd: string): Promise<void> {
 
 export async function writeState(cwd: string, state: MattRalphState): Promise<void> {
 	await ensureStore(cwd);
-	await writeFile(statePathFor(cwd, state.name), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+	await writeFile(
+		statePathFor(cwd, state.name),
+		`${JSON.stringify({ ...state, schemaVersion: MATT_RALPH_SCHEMA_VERSION }, null, 2)}\n`,
+		"utf8",
+	);
 }
 
 export async function readState(cwd: string, name: string): Promise<MattRalphState> {
 	const raw = await readFile(statePathFor(cwd, name), "utf8");
-	return JSON.parse(raw) as MattRalphState;
+	return parseMattRalphState(JSON.parse(raw), statePathFor(cwd, name));
 }
 
 export async function setActiveSession(cwd: string, name: string | undefined): Promise<void> {
@@ -83,10 +87,13 @@ export async function listStates(cwd: string): Promise<MattRalphState[]> {
 	const states: MattRalphState[] = [];
 	for (const file of files.filter((name) => name.endsWith(".state.json"))) {
 		try {
-			const state = JSON.parse(await readFile(path.join(dir, file), "utf8")) as unknown;
-			if (isMattRalphState(state)) states.push(state);
+			const state = parseMattRalphState(
+				JSON.parse(await readFile(path.join(dir, file), "utf8")),
+				path.join(dir, file),
+			);
+			states.push(state);
 		} catch {
-			// Ignore malformed session files in status output.
+			// Ignore malformed or unsupported session files in status output.
 		}
 	}
 	return states.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -99,10 +106,13 @@ export async function listArchivedStates(cwd: string): Promise<MattRalphState[]>
 	const states: MattRalphState[] = [];
 	for (const file of files.filter((name) => name.endsWith(".state.json"))) {
 		try {
-			const state = JSON.parse(await readFile(path.join(dir, file), "utf8")) as unknown;
-			if (isMattRalphState(state)) states.push(state);
+			const state = parseMattRalphState(
+				JSON.parse(await readFile(path.join(dir, file), "utf8")),
+				path.join(dir, file),
+			);
+			states.push(state);
 		} catch {
-			// Ignore malformed archived session files.
+			// Ignore malformed or unsupported archived session files.
 		}
 	}
 	return states.sort((a, b) => (b.archivedAt ?? b.startedAt).localeCompare(a.archivedAt ?? a.startedAt));
@@ -139,8 +149,18 @@ export async function appendTaskNote(cwd: string, state: MattRalphState, note: s
 	await writeFile(file, current + note, "utf8");
 }
 
+function parseMattRalphState(value: unknown, file: string): MattRalphState {
+	if (!isMattRalphState(value)) throw new Error(`Unsupported Matt Ralph state schema in ${file}.`);
+	return value;
+}
+
 function isMattRalphState(value: unknown): value is MattRalphState {
 	if (!value || typeof value !== "object") return false;
 	const state = value as Partial<MattRalphState>;
-	return state.mode === "implement" && typeof state.name === "string" && Array.isArray(state.childIssues);
+	return (
+		state.schemaVersion === MATT_RALPH_SCHEMA_VERSION &&
+		state.mode === "implement" &&
+		typeof state.name === "string" &&
+		Array.isArray(state.childIssues)
+	);
 }

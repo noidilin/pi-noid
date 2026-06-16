@@ -23,3 +23,15 @@ _Avoid_: worker step, issue job, child task
 **Herdr worker adapter**:
 The Ralph module that hides herdr CLI calls, worker-pane shell launch, sentinel matching, exit-code parsing, and pane-tail diagnostics behind one interface.
 _Avoid_: pane helper collection, shell wrapper, output parser
+
+**Orchestration projection**:
+The pure Ralph module that maps Ralph orchestration state, child Ralph session summaries, note paths, and caller-provided time into user-facing text such as plan output, status lines, notes, failure diagnostics, and parent summaries. It does not read files, mutate state, or call time itself.
+_Avoid_: status helper, view service, formatter collection
+
+**Orchestration state contract**:
+The strict, versioned crash-resume contract stored in parent orchestration state and child Ralph session state. It records the latest durable facts needed to recover parent orchestration after pane, process, or agent interruption.
+_Avoid_: cache, best-effort metadata, loose state shape
+
+**Orchestration child link**:
+The explicit bidirectional link between one parent orchestration issue run and one child Ralph session. It identifies the orchestration name, parent issue, child issue, issue run index, and parent state path so resume does not depend on naming conventions alone.
+_Avoid_: session-name convention, implicit worker link, inferred relationship

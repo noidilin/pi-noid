@@ -1,3 +1,5 @@
+export const ORCHESTRATE_SCHEMA_VERSION = 2;
+
 export type OrchestrateChild = {
 	number: number;
 	title: string;
@@ -58,6 +60,7 @@ export type OrchestrateIssueRun = {
 };
 
 export type OrchestrateState = {
+	schemaVersion: typeof ORCHESTRATE_SCHEMA_VERSION;
 	name: string;
 	parentIssue: number;
 	parentTitle: string;

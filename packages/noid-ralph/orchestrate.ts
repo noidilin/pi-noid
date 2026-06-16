@@ -14,18 +14,29 @@ import { assertInsideHerdr, createWorkerPane, getFocusedPane, sendKeys } from ".
 import { listStates } from "./loop-store";
 import { buildOrchestratePlan } from "./orchestrate-planner";
 import {
+	formatChildRunCompletedNote,
+	formatChildRunFailedNote,
+	formatChildRunStartedNote,
+	formatOrchestratePlan,
+	formatOrchestrateStatusLine,
+	formatParentFinalizationNote,
+	formatParentSummary,
+	formatUnsupportedOrchestrateStatusLine,
+} from "./orchestrate-projection";
+import {
 	appendOrchestrateNote,
 	createOrchestrateState,
 	getActiveOrchestration,
-	listOrchestrateStates,
+	listOrchestrateStateRecords,
 	orchestrateNotePathFor,
+	orchestrateStatePathFor,
 	readOrchestrateState,
 	requestStop,
 	setActiveOrchestration,
 	writeOrchestrateState,
 } from "./orchestrate-store";
 import type { OrchestrateIssueRun, OrchestratePlan, OrchestrateState } from "./orchestrate-types";
-import type { MattRalphState } from "./types";
+import type { OrchestrationChildLink } from "./types";
 
 export async function orchestrate(pi: ExtensionAPI, parts: string[], ctx: ExtensionContext): Promise<void> {
 	const sub = parts[0];
@@ -46,7 +57,7 @@ async function planCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionConte
 	if (!parent) return ctx.ui.notify("Usage: /ralph orchestrate plan #<parent>", "warning");
 	await preflight(pi, ctx.cwd, false);
 	const plan = await fetchPlan(pi, ctx.cwd, parent);
-	ctx.ui.notify(formatPlan(plan), plan.valid ? "info" : "warning");
+	ctx.ui.notify(formatOrchestratePlan(plan), plan.valid ? "info" : "warning");
 }
 
 async function startCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionContext): Promise<void> {
@@ -66,7 +77,7 @@ async function startCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionCont
 		return;
 	}
 	const plan = await fetchPlan(pi, ctx.cwd, parsed.parent);
-	ctx.ui.notify(formatPlan(plan), plan.valid ? "info" : "warning");
+	ctx.ui.notify(formatOrchestratePlan(plan), plan.valid ? "info" : "warning");
 	if (!plan.valid) {
 		const state = await createOrchestrateState(ctx.cwd, plan.parent, plan, { issueTimeoutMs: parsed.issueTimeoutMs });
 		state.status = "failed";
@@ -76,7 +87,7 @@ async function startCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionCont
 		return;
 	}
 	if (!parsed.yes && ctx.hasUI) {
-		const proceed = await ctx.ui.confirm("Start Ralph orchestration?", formatPlan(plan));
+		const proceed = await ctx.ui.confirm("Start Ralph orchestration?", formatOrchestratePlan(plan));
 		if (!proceed) return;
 	}
 	const state = await createOrchestrateState(ctx.cwd, plan.parent, plan, { issueTimeoutMs: parsed.issueTimeoutMs });
@@ -90,11 +101,27 @@ async function resumeCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionCon
 	const state = await readOrchestrateState(ctx.cwd, name);
 	state.stopRequested = false;
 	state.status = "active";
-	for (const run of state.issueRuns) {
+	const childStatesByName = new Map((await listStates(ctx.cwd)).map((childState) => [childState.name, childState]));
+	for (const [index, run] of state.issueRuns.entries()) {
 		if (run.status === "completed") continue;
 		if (await isIssueClosed(pi, ctx.cwd, run.issue)) {
+			const childState = run.sessionName ? childStatesByName.get(run.sessionName) : undefined;
+			if (
+				!childState ||
+				!orchestrationChildLinkMatches(childState.orchestrationChildLink, state, run, index, ctx.cwd)
+			) {
+				return pause(
+					state,
+					ctx,
+					`Resume found closed child #${run.issue} without its expected orchestration child link.`,
+				);
+			}
 			run.status = "completed";
 			run.completedAt = new Date().toISOString();
+			run.ralphStartedAt = childState.startedAt;
+			run.ralphCompletedAt = childState.completedAt;
+			run.initialDirtyStatus = childState.initialDirtyStatus;
+			run.ignoredDirtyStatus = childState.ignoredDirtyStatus;
 		}
 	}
 	state.currentIndex = Math.max(
@@ -108,13 +135,25 @@ async function resumeCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionCon
 
 async function statusCommand(ctx: ExtensionContext, args: string[]): Promise<void> {
 	const active = await getActiveOrchestration(ctx.cwd);
-	const states = args[0] ? [await readOrchestrateState(ctx.cwd, args[0])] : await listOrchestrateStates(ctx.cwd);
-	if (states.length === 0) return ctx.ui.notify("No Ralph orchestrations found in .ralph/.", "info");
+	const allRecords = await listOrchestrateStateRecords(ctx.cwd);
+	const requested = args[0]?.replace(/\.state\.json$/, "");
+	const records = requested
+		? allRecords.filter((record) => (record.kind === "state" ? record.state.name : record.name) === requested)
+		: allRecords;
+	if (records.length === 0) return ctx.ui.notify("No Ralph orchestrations found in .ralph/.", "info");
 	const ralphStatesByName = new Map((await listStates(ctx.cwd)).map((state) => [state.name, state]));
-	ctx.ui.notify(
-		`Ralph orchestrations${active ? ` (active: ${active})` : ""}:\n${states.map((state) => formatStateLine(ctx.cwd, state, ralphStatesByName)).join("\n")}`,
-		"info",
+	const now = new Date().toISOString();
+	const lines = records.map((record) =>
+		record.kind === "state"
+			? formatOrchestrateStatusLine({
+					state: record.state,
+					notePath: orchestrateNotePathFor(ctx.cwd, record.state.name),
+					childStatesByName: ralphStatesByName,
+					now,
+				})
+			: formatUnsupportedOrchestrateStatusLine(record),
 	);
+	ctx.ui.notify(`Ralph orchestrations${active ? ` (active: ${active})` : ""}:\n${lines.join("\n")}`, "info");
 }
 
 async function stopCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionContext): Promise<void> {
@@ -147,17 +186,14 @@ async function runOrchestration(pi: ExtensionAPI, ctx: ExtensionContext, state: 
 		await writeOrchestrateState(ctx.cwd, state);
 		if (!result) return;
 	}
-	const body = parentSummary(state);
+	const completedAt = new Date().toISOString();
+	const body = formatParentSummary(state, completedAt);
 	const finalization = await finalizeParentIssue(pi, ctx.cwd, state.parentIssue, body);
-	await appendOrchestrateNote(
-		ctx.cwd,
-		state,
-		`\n\n## Parent finalization\n\ncommented=${finalization.commented}, closed=${finalization.closed}${finalization.error ? `, error=${finalization.error}` : ""}\n`,
-	);
+	await appendOrchestrateNote(ctx.cwd, state, formatParentFinalizationNote(finalization));
 	if (!finalization.commented || !finalization.closed)
 		return pause(state, ctx, finalization.error ?? "Parent finalization failed.");
 	state.status = "completed";
-	state.completedAt = new Date().toISOString();
+	state.completedAt = completedAt;
 	await writeOrchestrateState(ctx.cwd, state);
 	await setActiveOrchestration(ctx.cwd, undefined);
 	ctx.ui.notify(`Ralph orchestration completed: ${state.name}`, "info");
@@ -179,6 +215,8 @@ async function runIssueWorker(
 			index,
 			issue: run.issue,
 			title: run.title,
+			parentIssue: state.parentIssue,
+			parentStatePath: orchestrateStatePathFor(ctx.cwd, state.name),
 			paneId,
 			issueTimeoutMs: state.issueTimeoutMs,
 		},
@@ -241,18 +279,10 @@ async function recordChildRunProgress(
 	progress: ChildRunProgress,
 ): Promise<void> {
 	if (progress.type === "started") {
-		await appendOrchestrateNote(
-			ctx.cwd,
-			state,
-			`\n\n### Started #${run.issue} ${run.title}\n\nHEAD before: ${run.headBefore}\nWorker session: ${run.sessionName}\n`,
-		);
+		await appendOrchestrateNote(ctx.cwd, state, formatChildRunStartedNote(run));
 	}
 	if (progress.type === "completed") {
-		await appendOrchestrateNote(
-			ctx.cwd,
-			state,
-			`\nCompleted #${run.issue} at ${run.completedAt}\nWorker exit code: ${run.workerExitCode ?? "<unknown>"}\nRalph runtime: ${formatDuration(run.ralphStartedAt, run.ralphCompletedAt)}\nOrchestrator wait: ${formatDuration(run.startedAt, run.completedAt)}\nHEAD after: ${run.headAfter}\nCommits:\n${(run.commits ?? []).map((commit) => `- ${commit}`).join("\n")}\n`,
-		);
+		await appendOrchestrateNote(ctx.cwd, state, formatChildRunCompletedNote(run));
 	}
 }
 
@@ -265,11 +295,7 @@ async function failRun(
 ): Promise<boolean> {
 	run.status = "failed";
 	run.error = error;
-	await appendOrchestrateNote(
-		ctx.cwd,
-		state,
-		`\nFailed #${run.issue}: ${error}\n\nPane tail:\n\`\`\`\n${paneTail}\n\`\`\`\n`,
-	);
+	await appendOrchestrateNote(ctx.cwd, state, formatChildRunFailedNote(run, paneTail));
 	await pause(state, ctx, error);
 	return false;
 }
@@ -298,6 +324,23 @@ async function preflight(pi: ExtensionAPI, cwd: string, requireHerdr: boolean): 
 	if (!(await hasCommand(pi, "gh", cwd))) throw new Error("gh is required for Ralph orchestration.");
 	if (!(await hasCommand(pi, "git", cwd))) throw new Error("git is required for Ralph orchestration.");
 	if (!(await isGitRepo(pi, cwd))) throw new Error("Ralph orchestration requires a git repository.");
+}
+
+function orchestrationChildLinkMatches(
+	link: OrchestrationChildLink | undefined,
+	state: OrchestrateState,
+	run: OrchestrateIssueRun,
+	index: number,
+	cwd: string,
+): boolean {
+	return Boolean(
+		link &&
+			link.orchestrationName === state.name &&
+			link.parentIssue === state.parentIssue &&
+			link.childIssue === run.issue &&
+			link.issueRunIndex === index &&
+			link.parentStatePath === orchestrateStatePathFor(cwd, state.name),
+	);
 }
 
 function parseParentArg(value: string | undefined): number | undefined {
@@ -329,93 +372,4 @@ function parseDuration(value: string | undefined): number | undefined {
 	const unit = match[2] ?? "ms";
 	const scale = unit === "h" ? 3_600_000 : unit === "m" ? 60_000 : unit === "s" ? 1_000 : 1;
 	return amount > 0 ? amount * scale : undefined;
-}
-
-function formatPlan(plan: OrchestratePlan): string {
-	return [
-		`Parent: #${plan.parent.number} ${plan.parent.title}`,
-		`Open children: ${plan.openChildren.length}; skipped closed: ${plan.skippedClosed.length}`,
-		plan.skippedClosed.length
-			? `Skipped: ${plan.skippedClosed.map((issue) => `#${issue.number}`).join(", ")}`
-			: undefined,
-		plan.blockers.length
-			? `Blockers:\n${plan.blockers.map((blocker) => `- ${blocker.raw}: ${blocker.reason ?? blocker.status}`).join("\n")}`
-			: undefined,
-		plan.cycles.length
-			? `Cycles:\n${plan.cycles.map((cycle) => `- ${cycle.map((issue) => `#${issue}`).join(" -> ")}`).join("\n")}`
-			: undefined,
-		plan.valid
-			? `Planned order:\n${plan.plannedOrder.map((issue, index) => `${index + 1}. #${issue.number} ${issue.title}`).join("\n") || "<none>"}`
-			: "Plan invalid; no worker will be launched.",
-	]
-		.filter(Boolean)
-		.join("\n");
-}
-
-function formatStateLine(cwd: string, state: OrchestrateState, ralphStatesByName: Map<string, MattRalphState>): string {
-	const done = state.issueRuns.filter((run) => run.status === "completed" || run.status === "skipped").length;
-	const next = state.issueRuns.find(
-		(run) => run.status === "pending" || run.status === "running" || run.status === "failed",
-	);
-	const current = state.issueRuns.find((run) => run.status === "running") ?? next;
-	const last = [...state.issueRuns]
-		.reverse()
-		.find((run) => run.status === "completed" || run.status === "failed" || run.status === "running");
-	const ralphOnlyDirtyCount = countRalphOnlyDirtyRuns(state, ralphStatesByName);
-	const detailLines = [
-		current ? `  current: ${formatIssueRunTiming(current, ralphStatesByName)}` : undefined,
-		last && last !== current ? `  last: ${formatIssueRunTiming(last, ralphStatesByName)}` : undefined,
-		ralphOnlyDirtyCount > 0 ? `  ralph-only dirt: ${ralphOnlyDirtyCount} child session(s)` : undefined,
-	]
-		.filter(Boolean)
-		.join("\n");
-	return `- ${state.name}: ${state.status}, ${done}/${state.issueRuns.length}, parent #${state.parentIssue}, duration ${formatDuration(state.startedAt, state.completedAt ?? new Date().toISOString())}, next ${next ? `#${next.issue}` : "<none>"}, pane ${state.herdr?.paneId ?? "<none>"}, notes ${orchestrateNotePathFor(cwd, state.name)}${state.failureReason ? `, reason ${state.failureReason}` : ""}${detailLines ? `\n${detailLines}` : ""}`;
-}
-
-function formatIssueRunTiming(run: OrchestrateIssueRun, ralphStatesByName: Map<string, MattRalphState>): string {
-	const childState = run.sessionName ? ralphStatesByName.get(run.sessionName) : undefined;
-	const sessionName = run.sessionName ?? "<none>";
-	const commits = run.commits?.length ?? 0;
-	const now = new Date().toISOString();
-	const workerDuration = formatDuration(
-		run.workerLaunchedAt ?? run.startedAt,
-		run.workerExitedAt ?? run.completedAt ?? (run.status === "running" ? now : undefined),
-	);
-	const ralphDuration = formatDuration(
-		run.ralphStartedAt ?? childState?.startedAt,
-		run.ralphCompletedAt ?? childState?.completedAt ?? (childState?.status === "active" ? now : undefined),
-	);
-	const exitCode = run.workerExitCode ?? "<unknown>";
-	return `#${run.issue} ${run.status}, session ${sessionName}, worker ${workerDuration}, ralph ${ralphDuration}, exit ${exitCode}, commits ${commits}`;
-}
-
-function countRalphOnlyDirtyRuns(state: OrchestrateState, ralphStatesByName: Map<string, MattRalphState>): number {
-	return state.issueRuns.filter((run) => {
-		const childState = run.sessionName ? ralphStatesByName.get(run.sessionName) : undefined;
-		return Boolean(
-			run.ignoredDirtyStatus ||
-				childState?.ignoredDirtyStatus ||
-				isRalphOnlyDirtyStatus(run.initialDirtyStatus) ||
-				isRalphOnlyDirtyStatus(childState?.initialDirtyStatus),
-		);
-	}).length;
-}
-
-function isRalphOnlyDirtyStatus(status: string | undefined): boolean {
-	if (!status) return false;
-	const lines = status.split("\n").filter((line) => line.trim().length > 0);
-	return lines.length > 0 && lines.every((line) => line.trimEnd().slice(3).startsWith(".ralph/"));
-}
-
-function formatDuration(start: string | undefined, end: string | undefined): string {
-	if (!start || !end) return "<unknown>";
-	const ms = Date.parse(end) - Date.parse(start);
-	if (!Number.isFinite(ms) || ms < 0) return "<unknown>";
-	const seconds = Math.round(ms / 1000);
-	if (seconds < 60) return `${seconds}s`;
-	return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
-function parentSummary(state: OrchestrateState): string {
-	return `Ralph herdr orchestration completed.\n\nParent: #${state.parentIssue}\nRun: ${state.name}\n\n## Order\n\n${state.issueRuns.map((run, index) => `${index + 1}. #${run.issue} ${run.title} — ${run.status} — commits: ${run.commits?.join(", ") || "<none>"}`).join("\n")}\n\n## Skipped\n\n${state.plan.skippedClosed.map((issue) => `- #${issue.number} ${issue.title}`).join("\n") || "- <none>"}\n\n## Notes\n\n- Worker pane: ${state.herdr?.paneId ?? "<none>"}\n- Started: ${state.startedAt}\n- Completed: ${new Date().toISOString()}\n`;
 }

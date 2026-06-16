@@ -41,7 +41,7 @@ import {
 	buildResumePrompt,
 	buildSystemInjection,
 } from "./prompt";
-import type { ChildIssue, MattRalphState, TargetDescriptor } from "./types";
+import { type ChildIssue, MATT_RALPH_SCHEMA_VERSION, type MattRalphState, type TargetDescriptor } from "./types";
 
 const REQUIRED_SKILLS = ["tdd", "diagnose", "grill-with-docs"];
 
@@ -304,6 +304,7 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 	const taskFileAbs = taskPathFor(ctx.cwd, name);
 	const taskFileRel = path.relative(ctx.cwd, taskFileAbs);
 	const state: MattRalphState = {
+		schemaVersion: MATT_RALPH_SCHEMA_VERSION,
 		name,
 		taskFile: taskFileRel,
 		status: "active",
@@ -320,6 +321,8 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 		maxIterations: parsed.maxIterations,
 		exitOnComplete: parsed.exitOnComplete,
 		sessionSuffix: parsed.sessionSuffix,
+		orchestratorName: parsed.orchestrationChildLink?.orchestrationName,
+		orchestrationChildLink: parsed.orchestrationChildLink,
 	};
 
 	await ensureStore(ctx.cwd);
@@ -689,6 +692,7 @@ function parseImplementArgs(raw: string): {
 	exitOnComplete?: boolean;
 	sessionSuffix?: string;
 	ignoreRalphDirty?: boolean;
+	orchestrationChildLink?: MattRalphState["orchestrationChildLink"];
 	error?: string;
 } {
 	const parts = splitArgs(raw);
@@ -696,6 +700,7 @@ function parseImplementArgs(raw: string): {
 	let exitOnComplete = false;
 	let sessionSuffix: string | undefined;
 	let ignoreRalphDirty = false;
+	const orchestrationLink: Partial<NonNullable<MattRalphState["orchestrationChildLink"]>> = {};
 	const targetParts: string[] = [];
 	for (let index = 0; index < parts.length; index += 1) {
 		const part = parts[index];
@@ -724,10 +729,96 @@ function parseImplementArgs(raw: string): {
 			ignoreRalphDirty = true;
 			continue;
 		}
+		if (part === "--orchestrator-name") {
+			const value = parts[index + 1];
+			if (!value || value.startsWith("--"))
+				return { target: targetParts.join(" "), error: "--orchestrator-name requires a value." };
+			orchestrationLink.orchestrationName = sanitizeSessionName(value);
+			index += 1;
+			continue;
+		}
+		if (part === "--orchestrator-parent-issue") {
+			const value = parsePositiveInteger(parts[index + 1]);
+			if (!value) return { target: targetParts.join(" "), error: "--orchestrator-parent-issue requires a number." };
+			orchestrationLink.parentIssue = value;
+			index += 1;
+			continue;
+		}
+		if (part === "--orchestrator-child-issue") {
+			const value = parsePositiveInteger(parts[index + 1]);
+			if (!value) return { target: targetParts.join(" "), error: "--orchestrator-child-issue requires a number." };
+			orchestrationLink.childIssue = value;
+			index += 1;
+			continue;
+		}
+		if (part === "--orchestrator-issue-run-index") {
+			const value = parseNonNegativeInteger(parts[index + 1]);
+			if (value === undefined)
+				return { target: targetParts.join(" "), error: "--orchestrator-issue-run-index requires a number." };
+			orchestrationLink.issueRunIndex = value;
+			index += 1;
+			continue;
+		}
+		if (part === "--orchestrator-state-path") {
+			const value = parts[index + 1];
+			if (!value || value.startsWith("--"))
+				return { target: targetParts.join(" "), error: "--orchestrator-state-path requires a value." };
+			orchestrationLink.parentStatePath = value;
+			index += 1;
+			continue;
+		}
 		if (part.startsWith("--")) return { target: targetParts.join(" "), error: `Unknown implement flag: ${part}` };
 		targetParts.push(part);
 	}
-	return { target: targetParts.join(" "), maxIterations, exitOnComplete, sessionSuffix, ignoreRalphDirty };
+	const orchestrationChildLink = completeOrchestrationChildLink(orchestrationLink);
+	if (Object.keys(orchestrationLink).length > 0 && !orchestrationChildLink) {
+		return {
+			target: targetParts.join(" "),
+			error: "Orchestrator flags require name, parent issue, child issue, issue run index, and state path.",
+		};
+	}
+	return {
+		target: targetParts.join(" "),
+		maxIterations,
+		exitOnComplete,
+		sessionSuffix,
+		ignoreRalphDirty,
+		orchestrationChildLink,
+	};
+}
+
+function completeOrchestrationChildLink(
+	link: Partial<NonNullable<MattRalphState["orchestrationChildLink"]>>,
+): MattRalphState["orchestrationChildLink"] | undefined {
+	if (Object.keys(link).length === 0) return undefined;
+	if (
+		!link.orchestrationName ||
+		link.parentIssue === undefined ||
+		link.childIssue === undefined ||
+		link.issueRunIndex === undefined ||
+		!link.parentStatePath
+	) {
+		return undefined;
+	}
+	return {
+		orchestrationName: link.orchestrationName,
+		parentIssue: link.parentIssue,
+		childIssue: link.childIssue,
+		issueRunIndex: link.issueRunIndex,
+		parentStatePath: link.parentStatePath,
+	};
+}
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+	if (!value || !/^\d+$/.test(value)) return undefined;
+	const number = Number(value);
+	return number > 0 ? number : undefined;
+}
+
+function parseNonNegativeInteger(value: string | undefined): number | undefined {
+	if (!value || !/^\d+$/.test(value)) return undefined;
+	const number = Number(value);
+	return number >= 0 ? number : undefined;
 }
 
 function ralphOnlyDirtyStatus(status: string): string | undefined {

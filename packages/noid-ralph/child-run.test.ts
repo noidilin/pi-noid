@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type ChildRunAdapters, type ChildRunProgress, runChildIssue } from "./child-run";
 import type { HerdrWorkerRunSpec } from "./herdr-runner";
-import type { MattRalphState } from "./types";
+import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
 const input = {
 	cwd: "/repo",
@@ -9,6 +9,8 @@ const input = {
 	index: 0,
 	issue: 34,
 	title: "Do the thing",
+	parentIssue: 42,
+	parentStatePath: "/repo/.ralph/orchestrate-issue-42-abc123.state.json",
 	paneId: "pane-1",
 	issueTimeoutMs: 120_000,
 };
@@ -28,6 +30,7 @@ function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & {
 	const scripts: string[] = [];
 	const workerRuns: HerdrWorkerRunSpec[] = [];
 	const childState: MattRalphState = {
+		schemaVersion: MATT_RALPH_SCHEMA_VERSION,
 		name: "placeholder",
 		taskFile: ".ralph/placeholder.md",
 		status: "completed",
@@ -38,6 +41,13 @@ function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & {
 		iteration: 1,
 		startedAt: "2026-01-01T00:00:03.000Z",
 		completedAt: "2026-01-01T00:00:04.000Z",
+		orchestrationChildLink: {
+			orchestrationName: input.orchestrationName,
+			parentIssue: input.parentIssue,
+			childIssue: input.issue,
+			issueRunIndex: input.index,
+			parentStatePath: input.parentStatePath,
+		},
 		...options.childState,
 	};
 	return {
@@ -95,7 +105,7 @@ describe("child run", () => {
 			"completed",
 		]);
 		expect(adapters.scripts[0]).toContain(
-			"/ralph implement #34 --exit-on-complete --ignore-ralph-dirty --session-suffix orchestrate-issue-42-abc123-1-issue-34",
+			"/ralph implement #34 --exit-on-complete --ignore-ralph-dirty --session-suffix orchestrate-issue-42-abc123-1-issue-34 --orchestrator-name orchestrate-issue-42-abc123 --orchestrator-parent-issue 42 --orchestrator-child-issue 34 --orchestrator-issue-run-index 0 --orchestrator-state-path /repo/.ralph/orchestrate-issue-42-abc123.state.json",
 		);
 		expect(adapters.workerRuns[0]).toMatchObject({
 			paneId: "pane-1",
@@ -120,6 +130,14 @@ describe("child run", () => {
 		if (outcome.ok) throw new Error("expected failure");
 		expect(outcome.reason).toBe("Child Ralph session did not complete.");
 		expect(outcome.diagnostics.childStatus).toBe("active");
+	});
+
+	it("returns a failed outcome when the child Ralph session link is missing", async () => {
+		const outcome = await runChildIssue(input, createAdapters({ childState: { orchestrationChildLink: undefined } }));
+
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected failure");
+		expect(outcome.reason).toBe("Child Ralph session link is missing or mismatched.");
 	});
 
 	it("returns a failed outcome when the GitHub child issue is open", async () => {

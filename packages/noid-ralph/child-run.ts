@@ -9,7 +9,7 @@ import {
 	runWorkerScriptInPane,
 } from "./herdr-runner";
 import { listStates, ralphDir, sanitizeSessionName } from "./loop-store";
-import type { MattRalphState } from "./types";
+import type { MattRalphState, OrchestrationChildLink } from "./types";
 
 export type ChildRunInput = {
 	cwd: string;
@@ -17,6 +17,8 @@ export type ChildRunInput = {
 	index: number;
 	issue: number;
 	title: string;
+	parentIssue: number;
+	parentStatePath: string;
 	paneId: string;
 	issueTimeoutMs: number;
 };
@@ -58,6 +60,7 @@ export type ChildRunProgress =
 export type ChildRunDiagnostics = {
 	paneTail?: string;
 	childStatus?: MattRalphState["status"];
+	childLink?: OrchestrationChildLink;
 };
 
 export type ChildRunOutcome =
@@ -111,7 +114,7 @@ export async function runChildIssue(
 			facts: { startedAt: facts.startedAt, headBefore: facts.headBefore, sessionName: facts.sessionName },
 		});
 
-		const workerPrompt = `/ralph implement #${input.issue} --exit-on-complete --ignore-ralph-dirty --session-suffix ${suffix}`;
+		const workerPrompt = `/ralph implement #${input.issue} --exit-on-complete --ignore-ralph-dirty --session-suffix ${suffix} --orchestrator-name ${input.orchestrationName} --orchestrator-parent-issue ${input.parentIssue} --orchestrator-child-issue ${input.issue} --orchestrator-issue-run-index ${input.index} --orchestrator-state-path ${input.parentStatePath}`;
 		const worker = createChildRalphWorkerScript({ issue: input.issue, prompt: workerPrompt });
 		const workerScript = path.join(ralphDir(input.cwd), `${input.orchestrationName}-issue-${input.issue}.worker.sh`);
 		facts.workerScript = path.relative(input.cwd, workerScript);
@@ -139,6 +142,7 @@ export async function runChildIssue(
 
 		const childState = await adapters.findRalphSession(facts.sessionName);
 		diagnostics.childStatus = childState?.status;
+		diagnostics.childLink = childState?.orchestrationChildLink;
 		facts.ralphStartedAt = childState?.startedAt;
 		facts.ralphCompletedAt = childState?.completedAt;
 		facts.initialDirtyStatus = childState?.initialDirtyStatus;
@@ -154,6 +158,9 @@ export async function runChildIssue(
 			},
 		});
 		if (childState?.status !== "completed") return fail("Child Ralph session did not complete.");
+		if (!childLinkMatches(childState.orchestrationChildLink, input)) {
+			return fail("Child Ralph session link is missing or mismatched.");
+		}
 
 		if (!(await adapters.isIssueClosed(input.issue))) return fail("GitHub child issue is still open.");
 
@@ -172,6 +179,17 @@ export async function runChildIssue(
 	} catch (error) {
 		return fail(error instanceof Error ? error.message : String(error));
 	}
+}
+
+function childLinkMatches(link: OrchestrationChildLink | undefined, input: ChildRunInput): boolean {
+	return Boolean(
+		link &&
+			link.orchestrationName === input.orchestrationName &&
+			link.parentIssue === input.parentIssue &&
+			link.childIssue === input.issue &&
+			link.issueRunIndex === input.index &&
+			link.parentStatePath === input.parentStatePath,
+	);
 }
 
 async function git(pi: ExtensionAPI, cwd: string, args: string[]): Promise<string> {
