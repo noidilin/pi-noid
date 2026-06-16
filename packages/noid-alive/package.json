@@ -1,0 +1,15 @@
+{
+	"name": "noid-alive",
+	"version": "0.1.0",
+	"type": "module",
+	"exports": {
+		".": "./index.ts"
+	},
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	}
+}

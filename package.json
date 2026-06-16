@@ -14,7 +14,8 @@
 			"./packages/noid-bar/index.ts",
 			"./packages/noid-skm/index.ts",
 			"./packages/noid-bar-config/index.ts",
-			"./packages/noid-ralph/index.ts"
+			"./packages/noid-ralph/index.ts",
+			"./packages/noid-alive/index.ts"
 		]
 	},
 	"scripts": {
