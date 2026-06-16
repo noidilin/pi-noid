@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type ChildRunProgress, createChildRunAdapters, runChildIssue } from "./child-run";
+import { type ChildRunProgress, createChildRunAdapters, runChildIssue, verifyClosedChildRun } from "./child-run";
 import {
 	dirtyStatusExcludingRalph,
 	discoverChildIssuesWithBodies,
@@ -36,7 +36,6 @@ import {
 	writeOrchestrateState,
 } from "./orchestrate-store";
 import type { OrchestrateIssueRun, OrchestratePlan, OrchestrateState } from "./orchestrate-types";
-import type { OrchestrationChildLink } from "./types";
 
 export async function orchestrate(pi: ExtensionAPI, parts: string[], ctx: ExtensionContext): Promise<void> {
 	const sub = parts[0];
@@ -101,27 +100,25 @@ async function resumeCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionCon
 	const state = await readOrchestrateState(ctx.cwd, name);
 	state.stopRequested = false;
 	state.status = "active";
-	const childStatesByName = new Map((await listStates(ctx.cwd)).map((childState) => [childState.name, childState]));
+	const childRunAdapters = createChildRunAdapters(pi, ctx.cwd);
 	for (const [index, run] of state.issueRuns.entries()) {
 		if (run.status === "completed") continue;
 		if (await isIssueClosed(pi, ctx.cwd, run.issue)) {
-			const childState = run.sessionName ? childStatesByName.get(run.sessionName) : undefined;
-			if (
-				!childState ||
-				!orchestrationChildLinkMatches(childState.orchestrationChildLink, state, run, index, ctx.cwd)
-			) {
-				return pause(
-					state,
-					ctx,
-					`Resume found closed child #${run.issue} without its expected orchestration child link.`,
-				);
-			}
-			run.status = "completed";
-			run.completedAt = new Date().toISOString();
-			run.ralphStartedAt = childState.startedAt;
-			run.ralphCompletedAt = childState.completedAt;
-			run.initialDirtyStatus = childState.initialDirtyStatus;
-			run.ignoredDirtyStatus = childState.ignoredDirtyStatus;
+			const result = await verifyClosedChildRun(
+				{
+					cwd: ctx.cwd,
+					orchestrationName: state.name,
+					index,
+					run,
+					parentIssue: state.parentIssue,
+					parentStatePath: orchestrateStatePathFor(ctx.cwd, state.name),
+				},
+				childRunAdapters,
+				async () => {
+					await writeOrchestrateState(ctx.cwd, state);
+				},
+			);
+			if (!result.ok) return pause(state, ctx, result.reason);
 		}
 	}
 	state.currentIndex = Math.max(
@@ -213,8 +210,7 @@ async function runIssueWorker(
 			cwd: ctx.cwd,
 			orchestrationName: state.name,
 			index,
-			issue: run.issue,
-			title: run.title,
+			run,
 			parentIssue: state.parentIssue,
 			parentStatePath: orchestrateStatePathFor(ctx.cwd, state.name),
 			paneId,
@@ -222,54 +218,12 @@ async function runIssueWorker(
 		},
 		createChildRunAdapters(pi, ctx.cwd),
 		async (progress) => {
-			applyChildRunProgress(run, progress);
-			await recordChildRunProgress(ctx, state, run, progress);
 			await writeOrchestrateState(ctx.cwd, state);
+			await recordChildRunProgress(ctx, state, run, progress);
 		},
 	);
 	if (!result.ok) return failRun(ctx, state, run, result.reason, result.diagnostics.paneTail ?? "");
 	return true;
-}
-
-function applyChildRunProgress(run: OrchestrateIssueRun, progress: ChildRunProgress): void {
-	if (progress.type === "started") {
-		run.status = "running";
-		run.startedAt = progress.facts.startedAt;
-		run.headBefore = progress.facts.headBefore;
-		run.sessionName = progress.facts.sessionName;
-		return;
-	}
-	if (progress.type === "workerScriptWritten") {
-		run.workerScript = progress.facts.workerScript;
-		return;
-	}
-	if (progress.type === "workerLaunched") {
-		run.workerLaunchedAt = progress.facts.workerLaunchedAt;
-		return;
-	}
-	if (progress.type === "workerExited") {
-		run.workerExitedAt = progress.facts.workerExitedAt;
-		run.workerExitCode = progress.facts.workerExitCode;
-		return;
-	}
-	if (progress.type === "childStateRead") {
-		run.ralphStartedAt = progress.facts.ralphStartedAt;
-		run.ralphCompletedAt = progress.facts.ralphCompletedAt;
-		run.initialDirtyStatus = progress.facts.initialDirtyStatus;
-		run.ignoredDirtyStatus = progress.facts.ignoredDirtyStatus;
-		return;
-	}
-	if (progress.type === "completed") {
-		run.status = "completed";
-		run.completedAt = progress.facts.completedAt;
-		run.headAfter = progress.facts.headAfter;
-		run.commits = progress.facts.commits;
-		return;
-	}
-	if (progress.type === "failed") {
-		run.status = "failed";
-		run.error = progress.reason;
-	}
 }
 
 async function recordChildRunProgress(
@@ -293,8 +247,6 @@ async function failRun(
 	error: string,
 	paneTail: string,
 ): Promise<boolean> {
-	run.status = "failed";
-	run.error = error;
 	await appendOrchestrateNote(ctx.cwd, state, formatChildRunFailedNote(run, paneTail));
 	await pause(state, ctx, error);
 	return false;
@@ -324,23 +276,6 @@ async function preflight(pi: ExtensionAPI, cwd: string, requireHerdr: boolean): 
 	if (!(await hasCommand(pi, "gh", cwd))) throw new Error("gh is required for Ralph orchestration.");
 	if (!(await hasCommand(pi, "git", cwd))) throw new Error("git is required for Ralph orchestration.");
 	if (!(await isGitRepo(pi, cwd))) throw new Error("Ralph orchestration requires a git repository.");
-}
-
-function orchestrationChildLinkMatches(
-	link: OrchestrationChildLink | undefined,
-	state: OrchestrateState,
-	run: OrchestrateIssueRun,
-	index: number,
-	cwd: string,
-): boolean {
-	return Boolean(
-		link &&
-			link.orchestrationName === state.name &&
-			link.parentIssue === state.parentIssue &&
-			link.childIssue === run.issue &&
-			link.issueRunIndex === index &&
-			link.parentStatePath === orchestrateStatePathFor(cwd, state.name),
-	);
 }
 
 function parseParentArg(value: string | undefined): number | undefined {

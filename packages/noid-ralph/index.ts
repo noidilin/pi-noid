@@ -1,49 +1,30 @@
-import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import type { FinalizeIssueResult } from "./github";
 import {
-	dirtyStatus,
-	dirtyStatusExcludingRalph,
-	discoverChildren,
-	extractParentFromBody,
-	finalizeIssue,
-	hasCommand,
-	isGitRepo,
-	parseIssueNumber,
-	viewIssue,
-} from "./github";
+	advanceImplementationSession,
+	buildImplementationSessionSystemInjection,
+	completeImplementationSession,
+	createImplementationSessionAdapters,
+	type ImplementationSessionEffect,
+	prepareImplementationSessionStart,
+	resumeImplementationSession,
+	startImplementationSession,
+	stopImplementationSession,
+} from "./implementation-session";
 import {
-	appendTaskNote,
 	archiveState,
 	deleteState,
 	deleteTask,
-	ensureStore,
 	getActiveState,
 	listArchivedStates,
 	listStates,
-	ralphDir,
 	readState,
 	sanitizeSessionName,
-	setActiveSession,
-	taskPathFor,
-	writeState,
 } from "./loop-store";
 import { orchestrate } from "./orchestrate";
-import {
-	buildFinalPrompt,
-	buildKickoffPrompt,
-	buildNextPrompt,
-	buildResumePrompt,
-	buildSystemInjection,
-} from "./prompt";
-import { type ChildIssue, MATT_RALPH_SCHEMA_VERSION, type MattRalphState, type TargetDescriptor } from "./types";
-
-const REQUIRED_SKILLS = ["tdd", "diagnose", "grill-with-docs"];
+import type { ChildIssue, MattRalphState } from "./types";
 
 export default function mattRalphExtension(pi: ExtensionAPI) {
 	let currentCwd = process.cwd();
@@ -71,68 +52,15 @@ export default function mattRalphExtension(pi: ExtensionAPI) {
 		],
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-			if (ctx.hasPendingMessages()) {
-				return {
-					content: [{ type: "text", text: "Pending messages already queued. Skipping matt_ralph_done." }],
-					details: {},
-				};
-			}
-			const state = await getActiveState(ctx.cwd);
-			if (!state) {
-				return { content: [{ type: "text", text: "No active Matt Ralph session found." }], details: {} };
-			}
-
-			state.iteration += 1;
-			state.currentIndex += 1;
-			state.lastAdvancedAt = new Date().toISOString();
-			await appendTaskNote(
-				ctx.cwd,
-				state,
-				`\n\n## Iteration ${state.iteration - 1} advanced\n\nAdvanced at ${state.lastAdvancedAt}.\n`,
-			);
-
-			if (state.maxIterations && state.iteration > state.maxIterations) {
-				state.status = "paused";
-				state.warnings = [
-					...(state.warnings ?? []),
-					`Paused after exceeding maxIterations=${state.maxIterations}.`,
-				];
-				await writeState(ctx.cwd, state);
-				await setActiveSession(ctx.cwd, undefined);
-				updateMattRalphUI(ctx, undefined);
-				emitMattEvent(pi, "matt_ralph:pause", { name: state.name });
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Matt Ralph paused after exceeding max iterations (${state.maxIterations}). No more work queued.`,
-						},
-					],
-					details: { state },
-				};
-			}
-
-			await writeState(ctx.cwd, state);
-			emitMattEvent(pi, "matt_ralph:advance", eventPayload(state));
-			updateMattRalphUI(ctx, state);
-
-			if (state.currentIndex >= state.childIssues.length) {
-				pi.sendUserMessage(buildFinalPrompt(state), { deliverAs: "followUp" });
-				return {
-					content: [{ type: "text", text: "All Matt Ralph targets processed. Queued final verification prompt." }],
-					details: { state },
-				};
-			}
-
-			pi.sendUserMessage(buildNextPrompt(state), { deliverAs: "followUp" });
+			const result = await advanceImplementationSession({
+				cwd: ctx.cwd,
+				hasPendingMessages: ctx.hasPendingMessages(),
+				adapters: createImplementationSessionAdapters(pi, ctx.cwd),
+			});
+			await executeImplementationSessionEffects(pi, ctx, result.effects);
 			return {
-				content: [
-					{
-						type: "text",
-						text: `Advanced Matt Ralph to target ${state.currentIndex + 1}/${state.childIssues.length}.`,
-					},
-				],
-				details: { state },
+				content: [{ type: "text", text: result.message ?? "Matt Ralph advanced." }],
+				details: result.state ? { state: result.state } : {},
 			};
 		},
 	});
@@ -140,27 +68,18 @@ export default function mattRalphExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event, ctx) => {
 		const state = await getActiveState(ctx.cwd);
 		if (!state) return;
-		return { systemPrompt: event.systemPrompt + buildSystemInjection(state) };
+		return { systemPrompt: event.systemPrompt + buildImplementationSessionSystemInjection(state) };
 	});
 
 	pi.on("message_end", async (event, ctx) => {
 		if (event.message.role !== "assistant") return;
 		const text = JSON.stringify(event.message);
 		if (!text.includes("MATT_RALPH_COMPLETE")) return;
-		const state = await getActiveState(ctx.cwd);
-		if (!state) return;
-		const finalization = await finalizeGithubIssues(pi, ctx, state);
-		state.status = "completed";
-		state.completedAt = new Date().toISOString();
-		await writeState(ctx.cwd, state);
-		await setActiveSession(ctx.cwd, undefined);
-		updateMattRalphUI(ctx, undefined);
-		emitMattEvent(pi, "matt_ralph:complete", { name: state.name, iteration: state.iteration, finalization });
-		ctx.ui.notify(
-			formatCompletionNotice(state.name, finalization),
-			finalization.failed.length > 0 ? "warning" : "info",
-		);
-		if (state.exitOnComplete) (ctx as { shutdown?: () => void }).shutdown?.();
+		const result = await completeImplementationSession({
+			cwd: ctx.cwd,
+			adapters: createImplementationSessionAdapters(pi, ctx.cwd),
+		});
+		await executeImplementationSessionEffects(pi, ctx, result.effects);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -264,76 +183,29 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 		ctx.ui.notify(parsed.error, "warning");
 		return;
 	}
-	const targetArg = parsed.target;
-	if (!targetArg) {
-		ctx.ui.notify(
-			"Usage: /ralph implement <issue-or-prd> [--max-iterations N] [--exit-on-complete] [--session-suffix suffix]",
-			"warning",
-		);
+	const adapters = createImplementationSessionAdapters(pi, ctx.cwd);
+	const prepared = await prepareImplementationSessionStart(
+		{
+			cwd: ctx.cwd,
+			targetArg: parsed.target,
+			maxIterations: parsed.maxIterations,
+			exitOnComplete: parsed.exitOnComplete,
+			sessionSuffix: parsed.sessionSuffix,
+			ignoreRalphDirty: parsed.ignoreRalphDirty,
+			orchestrationChildLink: parsed.orchestrationChildLink,
+		},
+		adapters,
+	);
+	if (!prepared.ok) {
+		await executeImplementationSessionEffects(pi, ctx, prepared.effects);
 		return;
 	}
-
-	if (!(await isGitRepo(pi, ctx.cwd))) {
-		ctx.ui.notify("Matt Ralph requires running inside a git repository.", "error");
-		return;
-	}
-
-	const target = describeTarget(ctx.cwd, targetArg);
-	if (target.kind === "path" && !existsSync(path.resolve(ctx.cwd, target.path))) {
-		ctx.ui.notify(`Target file not found: ${target.path}`, "error");
-		return;
-	}
-
-	const rawDirtyStatus = await dirtyStatus(pi, ctx.cwd);
-	const initialDirtyStatus = parsed.ignoreRalphDirty ? await dirtyStatusExcludingRalph(pi, ctx.cwd) : rawDirtyStatus;
-	const ignoredDirtyStatus = parsed.ignoreRalphDirty ? ralphOnlyDirtyStatus(rawDirtyStatus) : undefined;
-	if (initialDirtyStatus && ctx.hasUI) {
-		const proceed = await ctx.ui.confirm(
-			"Dirty worktree",
-			`git status --porcelain is not clean. Proceed and record the dirty state in .ralph notes?\n\n${initialDirtyStatus}`,
-		);
+	if (prepared.confirmation && ctx.hasUI) {
+		const proceed = await ctx.ui.confirm(prepared.confirmation.title, prepared.confirmation.message);
 		if (!proceed) return;
 	}
-
-	const warnings = await preflightWarnings(pi, ctx.cwd, target);
-	for (const warning of warnings) ctx.ui.notify(warning, "warning");
-
-	const { parentIssue, children } = await resolveTargets(pi, ctx.cwd, target);
-	const baseName = `implement-${sanitizeSessionName(targetArg)}`;
-	const name = parsed.sessionSuffix ? `${baseName}-${sanitizeSessionName(parsed.sessionSuffix)}` : baseName;
-	const taskFileAbs = taskPathFor(ctx.cwd, name);
-	const taskFileRel = path.relative(ctx.cwd, taskFileAbs);
-	const state: MattRalphState = {
-		schemaVersion: MATT_RALPH_SCHEMA_VERSION,
-		name,
-		taskFile: taskFileRel,
-		status: "active",
-		mode: "implement",
-		rootIssue: targetArg,
-		parentIssue,
-		childIssues: children,
-		currentIndex: 0,
-		iteration: 1,
-		startedAt: new Date().toISOString(),
-		initialDirtyStatus,
-		ignoredDirtyStatus,
-		warnings,
-		maxIterations: parsed.maxIterations,
-		exitOnComplete: parsed.exitOnComplete,
-		sessionSuffix: parsed.sessionSuffix,
-		orchestratorName: parsed.orchestrationChildLink?.orchestrationName,
-		orchestrationChildLink: parsed.orchestrationChildLink,
-	};
-
-	await ensureStore(ctx.cwd);
-	await mkdir(ralphDir(ctx.cwd), { recursive: true });
-	await writeFile(taskFileAbs, initialTaskFile(state), "utf8");
-	await writeState(ctx.cwd, state);
-	await setActiveSession(ctx.cwd, name);
-	updateMattRalphUI(ctx, state);
-	emitMattEvent(pi, "matt_ralph:start", eventPayload(state));
-	ctx.ui.notify(`Matt Ralph session created: ${taskFileRel}`, "info");
-	pi.sendUserMessage(buildKickoffPrompt(state));
+	const result = await startImplementationSession(prepared.prepared);
+	await executeImplementationSessionEffects(pi, ctx, result.effects);
 }
 
 async function status(ctx: ExtensionContext): Promise<void> {
@@ -356,40 +228,17 @@ async function listArchived(ctx: ExtensionContext): Promise<void> {
 }
 
 async function resume(pi: ExtensionAPI, sessionArg: string, ctx: ExtensionContext): Promise<void> {
-	const states = await listStates(ctx.cwd);
-	if (states.length === 0) {
-		ctx.ui.notify("No Matt Ralph sessions found in .ralph/.", "warning");
-		return;
-	}
-	const name = sessionArg.trim() || states.find((state) => state.status === "paused")?.name || states[0]?.name;
-	if (!name) return;
-	let state: MattRalphState;
-	try {
-		state = await readState(ctx.cwd, name.replace(/\.state\.json$/, ""));
-	} catch {
-		ctx.ui.notify(`Matt Ralph session not found: ${name}`, "error");
-		return;
-	}
-	state.status = "active";
-	state.lastResumedAt = new Date().toISOString();
-	await writeState(ctx.cwd, state);
-	await setActiveSession(ctx.cwd, state.name);
-	updateMattRalphUI(ctx, state);
-	pi.sendUserMessage(buildResumePrompt(state));
+	const result = await resumeImplementationSession(
+		ctx.cwd,
+		sessionArg,
+		createImplementationSessionAdapters(pi, ctx.cwd),
+	);
+	await executeImplementationSessionEffects(pi, ctx, result.effects);
 }
 
 async function stop(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	const state = await getActiveState(ctx.cwd);
-	if (!state) {
-		ctx.ui.notify("No active Matt Ralph session.", "info");
-		return;
-	}
-	state.status = "paused";
-	await writeState(ctx.cwd, state);
-	await setActiveSession(ctx.cwd, undefined);
-	updateMattRalphUI(ctx, undefined);
-	emitMattEvent(pi, "matt_ralph:pause", { name: state.name });
-	ctx.ui.notify(`Paused Matt Ralph session: ${state.name}`, "info");
+	const result = await stopImplementationSession(ctx.cwd);
+	await executeImplementationSessionEffects(pi, ctx, result.effects);
 }
 
 async function cancel(pi: ExtensionAPI, sessionArg: string, ctx: ExtensionContext): Promise<void> {
@@ -446,60 +295,6 @@ async function clean(all: boolean, ctx: ExtensionContext): Promise<void> {
 		`Cleaned ${states.length} completed Matt Ralph session(s):\n${states.map((state) => `- ${state.name}`).join("\n")}`,
 		"info",
 	);
-}
-
-function describeTarget(cwd: string, raw: string): TargetDescriptor {
-	const issueNumber = parseIssueNumber(raw);
-	if (issueNumber) return { kind: "github", raw, number: issueNumber };
-	const resolved = path.resolve(cwd, raw);
-	if (existsSync(resolved) || raw.includes("/") || raw.endsWith(".md")) return { kind: "path", raw, path: raw };
-	return { kind: "text", raw };
-}
-
-async function resolveTargets(
-	pi: ExtensionAPI,
-	cwd: string,
-	target: TargetDescriptor,
-): Promise<{ parentIssue?: number; children: ChildIssue[] }> {
-	if (target.kind !== "github") {
-		return { children: [{ number: 0, title: target.raw, source: "standalone" }] };
-	}
-
-	const issue = await viewIssue(pi, cwd, target.number);
-	const title = issue?.title ?? `Issue #${target.number}`;
-	const parentIssue = issue?.parent?.number ?? extractParentFromBody(issue?.body);
-	if (parentIssue) {
-		return {
-			parentIssue,
-			children: [{ number: target.number, title, state: issue?.state, source: "standalone" }],
-		};
-	}
-
-	const children = await discoverChildren(pi, cwd, target.number);
-	if (children.length > 0) return { parentIssue: target.number, children };
-	return {
-		parentIssue: target.number,
-		children: [{ number: target.number, title, state: issue?.state, source: "standalone" }],
-	};
-}
-
-async function preflightWarnings(pi: ExtensionAPI, cwd: string, target: TargetDescriptor): Promise<string[]> {
-	const warnings: string[] = [];
-	if (target.kind === "github" && !(await hasCommand(pi, "gh", cwd))) {
-		warnings.push(
-			"GitHub issue target detected, but gh is not available. Install/auth gh before agent issue fetches.",
-		);
-	}
-	for (const skill of REQUIRED_SKILLS) {
-		if (!existsSync(`/Users/noid/.agents/skills/${skill}`))
-			warnings.push(`Matt skill not found: ${skill}. Configure/install Matt skills if the agent needs it.`);
-	}
-	const hasAgentDocs = ["AGENTS.md", "CLAUDE.md", "docs/agents"].some((entry) => existsSync(path.join(cwd, entry)));
-	if (!hasAgentDocs)
-		warnings.push(
-			"No AGENTS.md, CLAUDE.md, or docs/agents/ found. Consider running the Matt setup skill; extension will not mutate settings.",
-		);
-	return warnings;
 }
 
 function formatStateLine(state: MattRalphState): string {
@@ -600,86 +395,19 @@ function emitMattEvent(pi: ExtensionAPI, name: string, payload: Record<string, u
 	pi.events.emit(name, payload);
 }
 
-type FinalizationSummary = {
-	succeeded: FinalizeIssueResult[];
-	failed: FinalizeIssueResult[];
-	skipped: string[];
-};
-
-async function finalizeGithubIssues(
+async function executeImplementationSessionEffects(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	state: MattRalphState,
-): Promise<FinalizationSummary> {
-	const issueNumbers = githubIssueNumbersFor(state);
-	if (issueNumbers.length === 0) {
-		const skipped = ["No GitHub issue targets in this session."];
-		await appendTaskNote(ctx.cwd, state, finalizationNote([], [], skipped));
-		return { succeeded: [], failed: [], skipped };
+	effects: ImplementationSessionEffect[],
+): Promise<void> {
+	for (const effect of effects) {
+		if (effect.type === "notify") ctx.ui.notify(effect.message, effect.level);
+		else if (effect.type === "prompt") {
+			pi.sendUserMessage(effect.prompt, effect.deliverAs ? { deliverAs: effect.deliverAs } : undefined);
+		} else if (effect.type === "event") emitMattEvent(pi, effect.name, effect.payload);
+		else if (effect.type === "updateUi") updateMattRalphUI(ctx, effect.state);
+		else if (effect.type === "shutdown") (ctx as { shutdown?: () => void }).shutdown?.();
 	}
-	if (!(await hasCommand(pi, "gh", ctx.cwd))) {
-		const skipped = ["gh is not available; skipped final GitHub issue comment/close."];
-		await appendTaskNote(ctx.cwd, state, finalizationNote([], [], skipped));
-		return { succeeded: [], failed: [], skipped };
-	}
-
-	const results: FinalizeIssueResult[] = [];
-	for (const issue of issueNumbers) results.push(await finalizeIssue(pi, ctx.cwd, issue));
-	const succeeded = results.filter((result) => result.commented && result.closed);
-	const failed = results.filter((result) => !result.commented || !result.closed);
-	await appendTaskNote(ctx.cwd, state, finalizationNote(succeeded, failed, []));
-	return { succeeded, failed, skipped: [] };
-}
-
-function githubIssueNumbersFor(state: MattRalphState): number[] {
-	const issues = state.childIssues.map((issue) => issue.number).filter((issue) => issue > 0);
-	const rootIssue = parseIssueNumber(state.rootIssue);
-	if (state.parentIssue && rootIssue === state.parentIssue) issues.push(state.parentIssue);
-	return [...new Set(issues)];
-}
-
-function finalizationNote(succeeded: FinalizeIssueResult[], failed: FinalizeIssueResult[], skipped: string[]): string {
-	const lines = ["", "", "## GitHub finalization", "", `Completed at ${new Date().toISOString()}.`, ""];
-	if (succeeded.length > 0) {
-		lines.push("### Commented and closed", "", ...succeeded.map((result) => `- #${result.issue}`), "");
-	}
-	if (failed.length > 0) {
-		lines.push(
-			"### Failed",
-			"",
-			...failed.map(
-				(result) =>
-					`- #${result.issue}: commented=${result.commented}, closed=${result.closed}${result.error ? `, error=${result.error}` : ""}`,
-			),
-			"",
-		);
-	}
-	if (skipped.length > 0) lines.push("### Skipped", "", ...skipped.map((reason) => `- ${reason}`), "");
-	return lines.join("\n");
-}
-
-function formatCompletionNotice(name: string, finalization: FinalizationSummary): string {
-	const pieces = [`Matt Ralph completed: ${name}`];
-	if (finalization.succeeded.length > 0) {
-		pieces.push(`commented/closed ${finalization.succeeded.map((result) => `#${result.issue}`).join(", ")}`);
-	}
-	if (finalization.failed.length > 0) {
-		pieces.push(
-			`GitHub finalization failed for ${finalization.failed.map((result) => `#${result.issue}`).join(", ")}`,
-		);
-	}
-	if (finalization.skipped.length > 0) pieces.push(finalization.skipped.join(" "));
-	return pieces.join("; ");
-}
-
-function eventPayload(state: MattRalphState): Record<string, unknown> {
-	return {
-		name: state.name,
-		parentIssue: state.parentIssue,
-		targetCount: state.childIssues.length,
-		iteration: state.iteration,
-		currentIndex: state.currentIndex,
-	};
 }
 
 function formatTargetLabel(target: ChildIssue): string {
@@ -819,22 +547,6 @@ function parseNonNegativeInteger(value: string | undefined): number | undefined 
 	if (!value || !/^\d+$/.test(value)) return undefined;
 	const number = Number(value);
 	return number >= 0 ? number : undefined;
-}
-
-function ralphOnlyDirtyStatus(status: string): string | undefined {
-	const ralphLines = status
-		.split("\n")
-		.map((line) => line.trimEnd())
-		.filter((line) => line.length > 0 && line.slice(3).startsWith(".ralph/"));
-	return ralphLines.length > 0 ? ralphLines.join("\n") : undefined;
-}
-
-function initialTaskFile(state: MattRalphState): string {
-	const targetLines = state.childIssues.map((issue, index) => {
-		const label = issue.number > 0 ? `#${issue.number} ${issue.title}` : issue.title;
-		return `${index + 1}. ${label} (${issue.source}, ${issue.state ?? "unknown"})`;
-	});
-	return `# Matt Ralph Session: ${state.name}\n\nStarted: ${state.startedAt}\nMode: ${state.mode}\nRoot input: ${state.rootIssue}\nParent issue: ${state.parentIssue ? `#${state.parentIssue}` : "<none>"}\nMax iterations: ${state.maxIterations ?? "<none>"}\n\n## Targets\n\n${targetLines.join("\n")}\n\n## Preflight\n\n### Initial dirty status\n\n\`\`\`\n${state.initialDirtyStatus || ""}\n\`\`\`\n\n### Ignored .ralph dirty status\n\n\`\`\`\n${state.ignoredDirtyStatus || ""}\n\`\`\`\n\n### Warnings\n\n${(state.warnings ?? []).map((warning) => `- ${warning}`).join("\n") || "- <none>"}\n\n## Progress\n`;
 }
 
 function splitArgs(args: string): string[] {

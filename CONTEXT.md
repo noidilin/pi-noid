@@ -12,6 +12,10 @@ _Avoid_: meta runner, parent service, orchestration component
 The pi session running `/ralph orchestrate ...`; it owns planning order, pause policy, stop handling, and parent issue finalization.
 _Avoid_: controller service, parent agent, coordinator component
 
+**Implementation session**:
+The Ralph lifecycle created by `/ralph implement ...`: resolving the target, checking preflight policy, creating `.ralph` state and notes, advancing child issues, producing prompts, and finalizing GitHub issues. The command shell parses strings and delegates typed lifecycle operations to it. Starting is explicit two-phase flow: prepare returns any confirmation needed, then start writes durable state after the command shell confirms.
+_Avoid_: implement command handler, session service, workflow component
+
 **Child Ralph session**:
 A fresh pi process running `/ralph implement #<child> ...` for exactly one child issue.
 _Avoid_: worker agent, child service, implementation component
