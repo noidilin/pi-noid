@@ -1,14 +1,12 @@
-import { chmod, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isIssueClosed } from "./github";
 import {
-	createChildRalphWorkerScript,
-	type HerdrWorkerRunResult,
-	type HerdrWorkerRunSpec,
-	runWorkerScriptInPane,
+	type ChildRalphSessionWorkerEvent,
+	type ChildRalphSessionWorkerEvidence,
+	type ChildRalphSessionWorkerSpec,
+	runChildRalphSessionWorker,
 } from "./herdr-runner";
-import { listStates, ralphDir, sanitizeSessionName } from "./loop-store";
+import { listStates, sanitizeSessionName } from "./loop-store";
 import type { OrchestrateIssueRun } from "./orchestrate-types";
 import type { MattRalphState, OrchestrationChildLink } from "./types";
 
@@ -75,8 +73,10 @@ export type ClosedChildRunOutcome = { ok: true } | { ok: false; reason: string; 
 export type ChildRunAdapters = {
 	now(): string;
 	git(args: string[]): Promise<string>;
-	writeWorkerScript(file: string, content: string): Promise<void>;
-	runWorkerScript(spec: HerdrWorkerRunSpec): Promise<HerdrWorkerRunResult>;
+	runChildRalphSession(
+		spec: ChildRalphSessionWorkerSpec,
+		onEvent?: (event: ChildRalphSessionWorkerEvent) => Promise<void> | void,
+	): Promise<ChildRalphSessionWorkerEvidence>;
 	findRalphSession(sessionName: string): Promise<MattRalphState | undefined>;
 	isIssueClosed(issue: number): Promise<boolean>;
 };
@@ -85,11 +85,7 @@ export function createChildRunAdapters(pi: ExtensionAPI, cwd: string): ChildRunA
 	return {
 		now: () => new Date().toISOString(),
 		git: (args) => git(pi, cwd, args),
-		writeWorkerScript: async (file, content) => {
-			await writeFile(file, content, "utf8");
-			await chmod(file, 0o755);
-		},
-		runWorkerScript: (spec) => runWorkerScriptInPane(pi, cwd, spec),
+		runChildRalphSession: (spec, onEvent) => runChildRalphSessionWorker(pi, spec, onEvent),
 		findRalphSession: (sessionName) => findRalphSession(cwd, sessionName),
 		isIssueClosed: (issue) => isIssueClosed(pi, cwd, issue),
 	};
@@ -124,29 +120,40 @@ export async function runChildIssue(
 		});
 
 		const workerPrompt = `/ralph implement #${issue} --exit-on-complete --ignore-ralph-dirty --session-suffix ${suffix} --orchestrator-name ${input.orchestrationName} --orchestrator-parent-issue ${input.parentIssue} --orchestrator-child-issue ${issue} --orchestrator-issue-run-index ${input.index} --orchestrator-state-path ${input.parentStatePath}`;
-		const worker = createChildRalphWorkerScript({ issue, prompt: workerPrompt });
-		const workerScript = path.join(ralphDir(input.cwd), `${input.orchestrationName}-issue-${issue}.worker.sh`);
-		facts.workerScript = path.relative(input.cwd, workerScript);
-		await adapters.writeWorkerScript(workerScript, worker.content);
-		await apply({ type: "workerScriptWritten", facts: { workerScript: facts.workerScript } });
-
-		const workerRun = await adapters.runWorkerScript({
-			paneId: input.paneId,
-			scriptPath: workerScript,
-			sentinel: worker.sentinel,
-			timeoutMs: input.issueTimeoutMs,
-			onLaunched: async () => {
-				facts.workerLaunchedAt = adapters.now();
-				await apply({ type: "workerLaunched", facts: { workerLaunchedAt: facts.workerLaunchedAt } });
+		const workerRun = await adapters.runChildRalphSession(
+			{
+				cwd: input.cwd,
+				paneId: input.paneId,
+				orchestrationName: input.orchestrationName,
+				issue,
+				prompt: workerPrompt,
+				timeoutMs: input.issueTimeoutMs,
+				now: adapters.now,
 			},
-		});
-		facts.workerExitedAt = adapters.now();
-		diagnostics.paneTail = workerRun.tail;
-		facts.workerExitCode = workerRun.exitCode;
-		await apply({
-			type: "workerExited",
-			facts: { workerExitedAt: facts.workerExitedAt, workerExitCode: facts.workerExitCode },
-		});
+			async (event) => {
+				if (event.type === "workerScriptWritten") {
+					facts.workerScript = event.facts.workerScript;
+					await apply({ type: "workerScriptWritten", facts: { workerScript: event.facts.workerScript } });
+				}
+				if (event.type === "workerLaunched") {
+					facts.workerLaunchedAt = event.facts.workerLaunchedAt;
+					await apply({ type: "workerLaunched", facts: { workerLaunchedAt: event.facts.workerLaunchedAt } });
+				}
+				if (event.type === "workerExited") {
+					facts.workerExitedAt = event.facts.workerExitedAt;
+					facts.workerExitCode = event.facts.workerExitCode;
+					await apply({
+						type: "workerExited",
+						facts: { workerExitedAt: event.facts.workerExitedAt, workerExitCode: event.facts.workerExitCode },
+					});
+				}
+			},
+		);
+		facts.workerScript ??= workerRun.workerScript;
+		facts.workerLaunchedAt ??= workerRun.workerLaunchedAt;
+		facts.workerExitedAt ??= workerRun.workerExitedAt;
+		facts.workerExitCode ??= workerRun.workerExitCode;
+		diagnostics.paneTail = workerRun.paneTail;
 		if (!workerRun.exited) return fail("Worker timed out before sentinel.");
 
 		const childState = await adapters.findRalphSession(facts.sessionName);

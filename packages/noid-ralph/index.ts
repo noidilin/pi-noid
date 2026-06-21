@@ -18,8 +18,10 @@ import {
 	deleteState,
 	deleteTask,
 	getActiveState,
-	listArchivedStates,
+	listArchivedStateRecords,
+	listStateRecords,
 	listStates,
+	type MattRalphStateRecord,
 	readState,
 	sanitizeSessionName,
 } from "./loop-store";
@@ -209,22 +211,22 @@ async function implement(pi: ExtensionAPI, rawTarget: string, ctx: ExtensionCont
 }
 
 async function status(ctx: ExtensionContext): Promise<void> {
-	const states = await listStates(ctx.cwd);
-	if (states.length === 0) {
+	const records = await listStateRecords(ctx.cwd);
+	if (records.length === 0) {
 		ctx.ui.notify("No Matt Ralph sessions found in .ralph/.", "info");
 		return;
 	}
-	const lines = states.map(formatStateLine);
+	const lines = records.map(formatStateRecordLine);
 	ctx.ui.notify(`Matt Ralph sessions:\n${lines.join("\n")}`, "info");
 }
 
 async function listArchived(ctx: ExtensionContext): Promise<void> {
-	const states = await listArchivedStates(ctx.cwd);
-	if (states.length === 0) {
+	const records = await listArchivedStateRecords(ctx.cwd);
+	if (records.length === 0) {
 		ctx.ui.notify("No archived Matt Ralph sessions found in .ralph/archive/.", "info");
 		return;
 	}
-	ctx.ui.notify(`Archived Matt Ralph sessions:\n${states.map(formatStateLine).join("\n")}`, "info");
+	ctx.ui.notify(`Archived Matt Ralph sessions:\n${records.map(formatStateRecordLine).join("\n")}`, "info");
 }
 
 async function resume(pi: ExtensionAPI, sessionArg: string, ctx: ExtensionContext): Promise<void> {
@@ -295,6 +297,13 @@ async function clean(all: boolean, ctx: ExtensionContext): Promise<void> {
 		`Cleaned ${states.length} completed Matt Ralph session(s):\n${states.map((state) => `- ${state.name}`).join("\n")}`,
 		"info",
 	);
+}
+
+function formatStateRecordLine(record: MattRalphStateRecord): string {
+	if (record.kind === "unsupported") {
+		return `- ${record.name}: unsupported schema, ${record.reason}, path ${record.path}`;
+	}
+	return formatStateLine(record.state);
 }
 
 function formatStateLine(state: MattRalphState): string {

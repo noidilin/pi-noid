@@ -1,13 +1,24 @@
-import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+	archiveRalphStateFiles,
+	deleteRalphNote,
+	deleteRalphState,
+	ensureRalphStateStorage,
+	getActiveRalphStateName,
+	listRalphStateRecords,
+	notePathFor,
+	readRalphState,
+	setActiveRalphStateName,
+	type UnsupportedStateRecord,
+	writeRalphState,
+} from "./ralph-state-storage";
 import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
 const ACTIVE_FILE = "active-session";
+const IMPLEMENT_PREFIX = "implement-";
 
-export function ralphDir(cwd: string): string {
-	return path.join(cwd, ".ralph");
-}
+export type UnsupportedMattRalphState = UnsupportedStateRecord;
+export type MattRalphStateRecord = { kind: "state"; state: MattRalphState } | UnsupportedMattRalphState;
 
 export function sanitizeSessionName(input: string): string {
 	const cleaned = input
@@ -20,50 +31,28 @@ export function sanitizeSessionName(input: string): string {
 	return cleaned || "session";
 }
 
-export function statePathFor(cwd: string, name: string): string {
-	return path.join(ralphDir(cwd), `${name}.state.json`);
+function archivedTaskPathFor(cwd: string, name: string): string {
+	return notePathFor(cwd, name, { archive: true });
 }
 
-export function archivedStatePathFor(cwd: string, name: string): string {
-	return path.join(ralphDir(cwd), "archive", `${name}.state.json`);
-}
-
-export function taskPathFor(cwd: string, name: string): string {
-	return path.join(ralphDir(cwd), `${name}.md`);
-}
-
-export function archivedTaskPathFor(cwd: string, name: string): string {
-	return path.join(ralphDir(cwd), "archive", `${name}.md`);
-}
-
-export async function ensureStore(cwd: string): Promise<void> {
-	await mkdir(path.join(ralphDir(cwd), "archive"), { recursive: true });
+async function ensureStore(cwd: string): Promise<void> {
+	await ensureRalphStateStorage(cwd);
 }
 
 export async function writeState(cwd: string, state: MattRalphState): Promise<void> {
-	await ensureStore(cwd);
-	await writeFile(
-		statePathFor(cwd, state.name),
-		`${JSON.stringify({ ...state, schemaVersion: MATT_RALPH_SCHEMA_VERSION }, null, 2)}\n`,
-		"utf8",
-	);
+	await writeRalphState(cwd, state.name, { ...state, schemaVersion: MATT_RALPH_SCHEMA_VERSION });
 }
 
 export async function readState(cwd: string, name: string): Promise<MattRalphState> {
-	const raw = await readFile(statePathFor(cwd, name), "utf8");
-	return parseMattRalphState(JSON.parse(raw), statePathFor(cwd, name));
+	return readRalphState(cwd, name, parseMattRalphState);
 }
 
 export async function setActiveSession(cwd: string, name: string | undefined): Promise<void> {
-	await ensureStore(cwd);
-	await writeFile(path.join(ralphDir(cwd), ACTIVE_FILE), name ? `${name}\n` : "", "utf8");
+	await setActiveRalphStateName(cwd, ACTIVE_FILE, name);
 }
 
 export async function getActiveSessionName(cwd: string): Promise<string | undefined> {
-	const file = path.join(ralphDir(cwd), ACTIVE_FILE);
-	if (!existsSync(file)) return undefined;
-	const name = (await readFile(file, "utf8")).trim();
-	return name || undefined;
+	return getActiveRalphStateName(cwd, ACTIVE_FILE);
 }
 
 export async function getActiveState(cwd: string): Promise<MattRalphState | undefined> {
@@ -80,52 +69,42 @@ export async function getActiveState(cwd: string): Promise<MattRalphState | unde
 	return states.filter((state) => state.status === "active").sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
 }
 
+export async function listStateRecords(cwd: string): Promise<MattRalphStateRecord[]> {
+	return listRalphStateRecords(cwd, {
+		prefix: IMPLEMENT_PREFIX,
+		parse: parseMattRalphState,
+		startedAt: (state) => state.startedAt,
+	});
+}
+
 export async function listStates(cwd: string): Promise<MattRalphState[]> {
-	const dir = ralphDir(cwd);
-	if (!existsSync(dir)) return [];
-	const files = await readdir(dir);
-	const states: MattRalphState[] = [];
-	for (const file of files.filter((name) => name.endsWith(".state.json"))) {
-		try {
-			const state = parseMattRalphState(
-				JSON.parse(await readFile(path.join(dir, file), "utf8")),
-				path.join(dir, file),
-			);
-			states.push(state);
-		} catch {
-			// Ignore malformed or unsupported session files in status output.
-		}
-	}
-	return states.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+	return (await listStateRecords(cwd))
+		.filter((record): record is { kind: "state"; state: MattRalphState } => record.kind === "state")
+		.map((record) => record.state);
+}
+
+export async function listArchivedStateRecords(cwd: string): Promise<MattRalphStateRecord[]> {
+	return listRalphStateRecords(cwd, {
+		prefix: IMPLEMENT_PREFIX,
+		archive: true,
+		parse: parseMattRalphState,
+		startedAt: (state) => state.archivedAt ?? state.startedAt,
+	});
 }
 
 export async function listArchivedStates(cwd: string): Promise<MattRalphState[]> {
-	const dir = path.join(ralphDir(cwd), "archive");
-	if (!existsSync(dir)) return [];
-	const files = await readdir(dir);
-	const states: MattRalphState[] = [];
-	for (const file of files.filter((name) => name.endsWith(".state.json"))) {
-		try {
-			const state = parseMattRalphState(
-				JSON.parse(await readFile(path.join(dir, file), "utf8")),
-				path.join(dir, file),
-			);
-			states.push(state);
-		} catch {
-			// Ignore malformed or unsupported archived session files.
-		}
-	}
-	return states.sort((a, b) => (b.archivedAt ?? b.startedAt).localeCompare(a.archivedAt ?? a.startedAt));
+	return (await listArchivedStateRecords(cwd))
+		.filter((record): record is { kind: "state"; state: MattRalphState } => record.kind === "state")
+		.map((record) => record.state);
 }
 
 export async function deleteState(cwd: string, name: string): Promise<void> {
-	await rm(statePathFor(cwd, name), { force: true });
+	await deleteRalphState(cwd, name);
 	if ((await getActiveSessionName(cwd)) === name) await setActiveSession(cwd, undefined);
 }
 
 export async function deleteTask(cwd: string, state: MattRalphState): Promise<void> {
-	const file = path.isAbsolute(state.taskFile) ? state.taskFile : path.join(cwd, state.taskFile);
-	await rm(file, { force: true });
+	await deleteRalphNote(cwd, state.name);
 }
 
 export async function archiveState(cwd: string, state: MattRalphState): Promise<MattRalphState> {
@@ -135,18 +114,10 @@ export async function archiveState(cwd: string, state: MattRalphState): Promise<
 		archivedAt: new Date().toISOString(),
 		taskFile: path.relative(cwd, archivedTaskPathFor(cwd, state.name)),
 	};
-	const sourceTask = path.isAbsolute(state.taskFile) ? state.taskFile : path.join(cwd, state.taskFile);
-	if (existsSync(sourceTask)) await rename(sourceTask, archivedTaskPathFor(cwd, state.name));
-	await writeFile(archivedStatePathFor(cwd, state.name), `${JSON.stringify(archived, null, 2)}\n`, "utf8");
-	await rm(statePathFor(cwd, state.name), { force: true });
+	await archiveRalphStateFiles(cwd, state.name);
+	await writeRalphState(cwd, state.name, archived, { archive: true });
 	if ((await getActiveSessionName(cwd)) === state.name) await setActiveSession(cwd, undefined);
 	return archived;
-}
-
-export async function appendTaskNote(cwd: string, state: MattRalphState, note: string): Promise<void> {
-	const file = path.isAbsolute(state.taskFile) ? state.taskFile : path.join(cwd, state.taskFile);
-	const current = existsSync(file) ? await readFile(file, "utf8") : "";
-	await writeFile(file, current + note, "utf8");
 }
 
 function parseMattRalphState(value: unknown, file: string): MattRalphState {

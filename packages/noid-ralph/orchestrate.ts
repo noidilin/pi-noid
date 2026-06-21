@@ -24,18 +24,16 @@ import {
 	formatUnsupportedOrchestrateStatusLine,
 } from "./orchestrate-projection";
 import {
-	appendOrchestrateNote,
 	createOrchestrateState,
 	getActiveOrchestration,
 	listOrchestrateStateRecords,
-	orchestrateNotePathFor,
-	orchestrateStatePathFor,
 	readOrchestrateState,
 	requestStop,
 	setActiveOrchestration,
 	writeOrchestrateState,
 } from "./orchestrate-store";
 import type { OrchestrateIssueRun, OrchestratePlan, OrchestrateState } from "./orchestrate-types";
+import { appendRalphNote, notePathFor, statePathFor } from "./ralph-state-storage";
 
 export async function orchestrate(pi: ExtensionAPI, parts: string[], ctx: ExtensionContext): Promise<void> {
 	const sub = parts[0];
@@ -111,7 +109,7 @@ async function resumeCommand(pi: ExtensionAPI, args: string[], ctx: ExtensionCon
 					index,
 					run,
 					parentIssue: state.parentIssue,
-					parentStatePath: orchestrateStatePathFor(ctx.cwd, state.name),
+					parentStatePath: statePathFor(ctx.cwd, state.name),
 				},
 				childRunAdapters,
 				async () => {
@@ -144,7 +142,7 @@ async function statusCommand(ctx: ExtensionContext, args: string[]): Promise<voi
 		record.kind === "state"
 			? formatOrchestrateStatusLine({
 					state: record.state,
-					notePath: orchestrateNotePathFor(ctx.cwd, record.state.name),
+					notePath: notePathFor(ctx.cwd, record.state.name),
 					childStatesByName: ralphStatesByName,
 					now,
 				})
@@ -167,7 +165,7 @@ async function runOrchestration(pi: ExtensionAPI, ctx: ExtensionContext, state: 
 	await setActiveOrchestration(ctx.cwd, state.name);
 	if (!state.herdr?.paneId) {
 		const focused = await getFocusedPane(pi, ctx.cwd);
-		const worker = await createWorkerPane(pi, ctx.cwd, focused.paneId, "right");
+		const worker = await createWorkerPane(pi, ctx.cwd, focused.paneId, "down");
 		state.herdr = {
 			workspaceId: worker.workspaceId ?? focused.workspaceId,
 			tabId: worker.tabId ?? focused.tabId,
@@ -186,7 +184,7 @@ async function runOrchestration(pi: ExtensionAPI, ctx: ExtensionContext, state: 
 	const completedAt = new Date().toISOString();
 	const body = formatParentSummary(state, completedAt);
 	const finalization = await finalizeParentIssue(pi, ctx.cwd, state.parentIssue, body);
-	await appendOrchestrateNote(ctx.cwd, state, formatParentFinalizationNote(finalization));
+	await appendRalphNote(ctx.cwd, state.name, formatParentFinalizationNote(finalization));
 	if (!finalization.commented || !finalization.closed)
 		return pause(state, ctx, finalization.error ?? "Parent finalization failed.");
 	state.status = "completed";
@@ -212,7 +210,7 @@ async function runIssueWorker(
 			index,
 			run,
 			parentIssue: state.parentIssue,
-			parentStatePath: orchestrateStatePathFor(ctx.cwd, state.name),
+			parentStatePath: statePathFor(ctx.cwd, state.name),
 			paneId,
 			issueTimeoutMs: state.issueTimeoutMs,
 		},
@@ -233,10 +231,10 @@ async function recordChildRunProgress(
 	progress: ChildRunProgress,
 ): Promise<void> {
 	if (progress.type === "started") {
-		await appendOrchestrateNote(ctx.cwd, state, formatChildRunStartedNote(run));
+		await appendRalphNote(ctx.cwd, state.name, formatChildRunStartedNote(run));
 	}
 	if (progress.type === "completed") {
-		await appendOrchestrateNote(ctx.cwd, state, formatChildRunCompletedNote(run));
+		await appendRalphNote(ctx.cwd, state.name, formatChildRunCompletedNote(run));
 	}
 }
 
@@ -247,7 +245,7 @@ async function failRun(
 	error: string,
 	paneTail: string,
 ): Promise<boolean> {
-	await appendOrchestrateNote(ctx.cwd, state, formatChildRunFailedNote(run, paneTail));
+	await appendRalphNote(ctx.cwd, state.name, formatChildRunFailedNote(run, paneTail));
 	await pause(state, ctx, error);
 	return false;
 }

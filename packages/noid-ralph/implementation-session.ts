@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { FinalizeIssueResult } from "./github";
@@ -14,18 +14,7 @@ import {
 	parseIssueNumber,
 	viewIssue,
 } from "./github";
-import {
-	appendTaskNote,
-	ensureStore,
-	getActiveState,
-	listStates,
-	ralphDir,
-	readState,
-	sanitizeSessionName,
-	setActiveSession,
-	taskPathFor,
-	writeState,
-} from "./loop-store";
+import { getActiveState, listStates, readState, sanitizeSessionName, setActiveSession, writeState } from "./loop-store";
 import {
 	buildFinalPrompt,
 	buildKickoffPrompt,
@@ -33,6 +22,7 @@ import {
 	buildResumePrompt,
 	buildSystemInjection,
 } from "./prompt";
+import { appendRalphNote, ensureRalphStateStorage, notePathFor } from "./ralph-state-storage";
 import { type ChildIssue, MATT_RALPH_SCHEMA_VERSION, type MattRalphState, type TargetDescriptor } from "./types";
 
 const REQUIRED_SKILLS = ["tdd", "diagnose", "grill-with-docs"];
@@ -167,7 +157,7 @@ export async function startImplementationSession(
 ): Promise<ImplementationSessionResult> {
 	const baseName = `implement-${sanitizeSessionName(prepared.targetArg)}`;
 	const name = prepared.sessionSuffix ? `${baseName}-${sanitizeSessionName(prepared.sessionSuffix)}` : baseName;
-	const taskFileAbs = taskPathFor(prepared.cwd, name);
+	const taskFileAbs = notePathFor(prepared.cwd, name);
 	const taskFileRel = path.relative(prepared.cwd, taskFileAbs);
 	const state: MattRalphState = {
 		schemaVersion: MATT_RALPH_SCHEMA_VERSION,
@@ -191,8 +181,7 @@ export async function startImplementationSession(
 		orchestrationChildLink: prepared.orchestrationChildLink,
 	};
 
-	await ensureStore(prepared.cwd);
-	await mkdir(ralphDir(prepared.cwd), { recursive: true });
+	await ensureRalphStateStorage(prepared.cwd);
 	await writeFile(taskFileAbs, initialTaskFile(state), "utf8");
 	await writeState(prepared.cwd, state);
 	await setActiveSession(prepared.cwd, name);
@@ -273,9 +262,9 @@ export async function advanceImplementationSession(input: {
 	state.iteration += 1;
 	state.currentIndex += 1;
 	state.lastAdvancedAt = input.adapters.now();
-	await appendTaskNote(
+	await appendRalphNote(
 		input.cwd,
-		state,
+		state.name,
 		`\n\n## Iteration ${state.iteration - 1} advanced\n\nAdvanced at ${state.lastAdvancedAt}.\n`,
 	);
 
@@ -430,12 +419,12 @@ async function finalizeGithubIssues(
 	const issueNumbers = githubIssueNumbersFor(state);
 	if (issueNumbers.length === 0) {
 		const skipped = ["No GitHub issue targets in this session."];
-		await appendTaskNote(cwd, state, finalizationNote([], [], skipped));
+		await appendRalphNote(cwd, state.name, finalizationNote([], [], skipped));
 		return { succeeded: [], failed: [], skipped };
 	}
 	if (!(await adapters.hasCommand("gh"))) {
 		const skipped = ["gh is not available; skipped final GitHub issue comment/close."];
-		await appendTaskNote(cwd, state, finalizationNote([], [], skipped));
+		await appendRalphNote(cwd, state.name, finalizationNote([], [], skipped));
 		return { succeeded: [], failed: [], skipped };
 	}
 
@@ -443,7 +432,7 @@ async function finalizeGithubIssues(
 	for (const issue of issueNumbers) results.push(await adapters.finalizeIssue(issue));
 	const succeeded = results.filter((result) => result.commented && result.closed);
 	const failed = results.filter((result) => !result.commented || !result.closed);
-	await appendTaskNote(cwd, state, finalizationNote(succeeded, failed, []));
+	await appendRalphNote(cwd, state.name, finalizationNote(succeeded, failed, []));
 	return { succeeded, failed, skipped: [] };
 }
 

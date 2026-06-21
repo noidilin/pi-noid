@@ -1,31 +1,21 @@
-import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { formatInitialOrchestrateNote } from "./orchestrate-projection";
 import { ORCHESTRATE_SCHEMA_VERSION, type OrchestratePlan, type OrchestrateState } from "./orchestrate-types";
+import {
+	appendRalphNote,
+	ensureRalphStateStorage,
+	getActiveRalphStateName,
+	listRalphStateRecords,
+	readRalphState,
+	setActiveRalphStateName,
+	type UnsupportedStateRecord,
+	writeRalphState,
+} from "./ralph-state-storage";
 
 const ACTIVE_ORCHESTRATION = "active-orchestration";
+const ORCHESTRATE_PREFIX = "orchestrate-";
 
-export type UnsupportedOrchestrateState = {
-	kind: "unsupported";
-	name: string;
-	path: string;
-	reason: string;
-};
-
+export type UnsupportedOrchestrateState = UnsupportedStateRecord;
 export type OrchestrateStateRecord = { kind: "state"; state: OrchestrateState } | UnsupportedOrchestrateState;
-
-export function ralphDir(cwd: string): string {
-	return path.join(cwd, ".ralph");
-}
-
-export function orchestrateStatePathFor(cwd: string, name: string): string {
-	return path.join(ralphDir(cwd), `${name}.state.json`);
-}
-
-export function orchestrateNotePathFor(cwd: string, name: string): string {
-	return path.join(ralphDir(cwd), `${name}.md`);
-}
 
 export async function createOrchestrateState(
 	cwd: string,
@@ -48,25 +38,18 @@ export async function createOrchestrateState(
 		plan,
 		issueRuns: plan.plannedOrder.map((issue) => ({ issue: issue.number, title: issue.title, status: "pending" })),
 	};
-	await mkdir(ralphDir(cwd), { recursive: true });
-	await writeFile(orchestrateNotePathFor(cwd, name), formatInitialOrchestrateNote(state), "utf8");
+	await ensureRalphStateStorage(cwd);
+	await appendRalphNote(cwd, name, formatInitialOrchestrateNote(state));
 	await writeOrchestrateState(cwd, state);
 	return state;
 }
 
 export async function writeOrchestrateState(cwd: string, state: OrchestrateState): Promise<void> {
-	await mkdir(ralphDir(cwd), { recursive: true });
-	await writeFile(
-		orchestrateStatePathFor(cwd, state.name),
-		`${JSON.stringify({ ...state, schemaVersion: ORCHESTRATE_SCHEMA_VERSION }, null, 2)}\n`,
-		"utf8",
-	);
+	await writeRalphState(cwd, state.name, { ...state, schemaVersion: ORCHESTRATE_SCHEMA_VERSION });
 }
 
 export async function readOrchestrateState(cwd: string, name: string): Promise<OrchestrateState> {
-	const normalized = name.replace(/\.state\.json$/, "");
-	const file = orchestrateStatePathFor(cwd, normalized);
-	return parseOrchestrateState(JSON.parse(await readFile(file, "utf8")), file);
+	return readRalphState(cwd, name, parseOrchestrateState);
 }
 
 export async function listOrchestrateStates(cwd: string): Promise<OrchestrateState[]> {
@@ -77,45 +60,19 @@ export async function listOrchestrateStates(cwd: string): Promise<OrchestrateSta
 }
 
 export async function listOrchestrateStateRecords(cwd: string): Promise<OrchestrateStateRecord[]> {
-	const dir = ralphDir(cwd);
-	if (!existsSync(dir)) return [];
-	const records: OrchestrateStateRecord[] = [];
-	for (const file of await readdir(dir)) {
-		if (!file.startsWith("orchestrate-") || !file.endsWith(".state.json")) continue;
-		const filePath = path.join(dir, file);
-		try {
-			records.push({
-				kind: "state",
-				state: parseOrchestrateState(JSON.parse(await readFile(filePath, "utf8")), filePath),
-			});
-		} catch (error) {
-			records.push({
-				kind: "unsupported",
-				name: file.replace(/\.state\.json$/, ""),
-				path: filePath,
-				reason: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-	return records.sort((a, b) => recordStartedAt(b).localeCompare(recordStartedAt(a)));
+	return listRalphStateRecords(cwd, {
+		prefix: ORCHESTRATE_PREFIX,
+		parse: parseOrchestrateState,
+		startedAt: (state) => state.startedAt,
+	});
 }
 
 export async function setActiveOrchestration(cwd: string, name: string | undefined): Promise<void> {
-	await mkdir(ralphDir(cwd), { recursive: true });
-	await writeFile(path.join(ralphDir(cwd), ACTIVE_ORCHESTRATION), name ? `${name}\n` : "", "utf8");
+	await setActiveRalphStateName(cwd, ACTIVE_ORCHESTRATION, name);
 }
 
 export async function getActiveOrchestration(cwd: string): Promise<string | undefined> {
-	const file = path.join(ralphDir(cwd), ACTIVE_ORCHESTRATION);
-	if (!existsSync(file)) return undefined;
-	const name = (await readFile(file, "utf8")).trim();
-	return name || undefined;
-}
-
-export async function appendOrchestrateNote(cwd: string, state: OrchestrateState, markdown: string): Promise<void> {
-	const file = orchestrateNotePathFor(cwd, state.name);
-	const current = existsSync(file) ? await readFile(file, "utf8") : "";
-	await writeFile(file, current + markdown, "utf8");
+	return getActiveRalphStateName(cwd, ACTIVE_ORCHESTRATION);
 }
 
 export async function requestStop(cwd: string, name: string): Promise<OrchestrateState> {
@@ -136,8 +93,4 @@ function parseOrchestrateState(value: unknown, file: string): OrchestrateState {
 		throw new Error(`Malformed orchestration state in ${file}.`);
 	}
 	return state as OrchestrateState;
-}
-
-function recordStartedAt(record: OrchestrateStateRecord): string {
-	return record.kind === "state" ? record.state.startedAt : "";
 }

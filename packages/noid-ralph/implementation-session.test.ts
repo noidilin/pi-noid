@@ -11,7 +11,8 @@ import {
 	startImplementationSession,
 	stopImplementationSession,
 } from "./implementation-session";
-import { getActiveState, readState, setActiveSession, taskPathFor, writeState } from "./loop-store";
+import { getActiveState, readState, setActiveSession, writeState } from "./loop-store";
+import { notePathFor } from "./ralph-state-storage";
 import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
 async function tempRepo(): Promise<string> {
@@ -83,7 +84,7 @@ describe("implementation session", () => {
 			ignoredDirtyStatus: " M .ralph/notes.md",
 		});
 		expect((await getActiveState(cwd))?.name).toBe("implement-write-tests");
-		expect(await readFile(taskPathFor(cwd, "implement-write-tests"), "utf8")).toContain("## Preflight");
+		expect(await readFile(notePathFor(cwd, "implement-write-tests"), "utf8")).toContain("## Preflight");
 	});
 
 	it("advances to final verification through an effect list", async () => {
@@ -142,6 +143,6 @@ describe("implementation session", () => {
 
 		expect((await readState(cwd, "implement-issue-34")).status).toBe("completed");
 		expect(result.effects).toContainEqual(expect.objectContaining({ type: "notify", level: "warning" }));
-		expect(await readFile(taskPathFor(cwd, "implement-issue-34"), "utf8")).toContain("close failed");
+		expect(await readFile(notePathFor(cwd, "implement-issue-34"), "utf8")).toContain("close failed");
 	});
 });

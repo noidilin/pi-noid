@@ -2,13 +2,9 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-	createOrchestrateState,
-	listOrchestrateStateRecords,
-	orchestrateStatePathFor,
-	readOrchestrateState,
-} from "./orchestrate-store";
+import { createOrchestrateState, listOrchestrateStateRecords, readOrchestrateState } from "./orchestrate-store";
 import { ORCHESTRATE_SCHEMA_VERSION, type OrchestratePlan } from "./orchestrate-types";
+import { statePathFor } from "./ralph-state-storage";
 
 function plan(): OrchestratePlan {
 	return {
@@ -39,7 +35,7 @@ describe("orchestrate store", () => {
 	it("reports unsupported old schemas in records", async () => {
 		const cwd = await mkdtemp(path.join(os.tmpdir(), "ralph-store-"));
 		await mkdir(path.join(cwd, ".ralph"), { recursive: true });
-		await writeFile(orchestrateStatePathFor(cwd, "orchestrate-issue-42-old"), JSON.stringify({ name: "old" }));
+		await writeFile(statePathFor(cwd, "orchestrate-issue-42-old"), JSON.stringify({ name: "old" }));
 		const records = await listOrchestrateStateRecords(cwd);
 
 		expect(records).toHaveLength(1);

@@ -25,7 +25,7 @@ One parent-orchestration attempt to execute and verify a single child Ralph sess
 _Avoid_: worker step, issue job, child task
 
 **Herdr worker adapter**:
-The Ralph module that hides herdr CLI calls, worker-pane shell launch, sentinel matching, exit-code parsing, and pane-tail diagnostics behind one interface.
+The Ralph module that runs one child Ralph session in a herdr worker pane and hides worker-script creation, herdr CLI calls, worker-pane shell launch, sentinel ownership and matching, exit-code parsing, and pane-tail diagnostics behind one interface. It returns worker evidence; Child run verifies child Ralph session state, GitHub closure, and commit range.
 _Avoid_: pane helper collection, shell wrapper, output parser
 
 **Orchestration projection**:
@@ -35,6 +35,14 @@ _Avoid_: status helper, view service, formatter collection
 **Orchestration state contract**:
 The strict, versioned crash-resume contract stored in parent orchestration state and child Ralph session state. It records the latest durable facts needed to recover parent orchestration after pane, process, or agent interruption.
 _Avoid_: cache, best-effort metadata, loose state shape
+
+**Ralph state storage**:
+The shared Ralph module that owns `.ralph` filesystem layout, active markers, JSON state file I/O, state listing, note appends, and archive moves. Implementation session and Parent orchestration import it directly, while keeping their own domain parsing and creation policy.
+_Avoid_: storage service, store utility, filesystem helper
+
+**Unsupported state record**:
+A Ralph state listing entry for a `.state.json` file whose schema or shape cannot be parsed by the caller's state contract. It keeps status and resume commands resilient without silently hiding incompatible files.
+_Avoid_: broken cache entry, ignored file, bad metadata
 
 **Orchestration child link**:
 The explicit bidirectional link between one parent orchestration issue run and one child Ralph session. It identifies the orchestration name, parent issue, child issue, issue run index, and parent state path so resume does not depend on naming conventions alone.

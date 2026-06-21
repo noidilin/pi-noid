@@ -1,13 +1,16 @@
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ralphDir } from "./ralph-state-storage";
 
 export type HerdrPane = { paneId: string; tabId?: string; workspaceId?: string };
 
-export type HerdrWorkerScript = {
+type HerdrWorkerScript = {
 	content: string;
 	sentinel: string;
 };
 
-export type HerdrWorkerRunSpec = {
+type HerdrWorkerRunSpec = {
 	paneId: string;
 	scriptPath: string;
 	sentinel: string;
@@ -16,21 +19,47 @@ export type HerdrWorkerRunSpec = {
 	onLaunched?: () => Promise<void> | void;
 };
 
-export type HerdrWorkerRunResult = {
+type HerdrWorkerRunResult = {
 	exited: boolean;
 	exitCode?: number;
 	tail: string;
 };
 
+export type ChildRalphSessionWorkerSpec = {
+	cwd: string;
+	paneId: string;
+	orchestrationName: string;
+	issue: number;
+	prompt: string;
+	timeoutMs: number;
+	tailLines?: number;
+	now?: () => string;
+};
+
+export type ChildRalphSessionWorkerEvidence = {
+	workerScript: string;
+	workerLaunchedAt: string;
+	workerExitedAt: string;
+	workerExitCode?: number;
+	paneTail: string;
+	exited: boolean;
+	sentinel: string;
+};
+
+export type ChildRalphSessionWorkerEvent =
+	| { type: "workerScriptWritten"; facts: Pick<ChildRalphSessionWorkerEvidence, "workerScript" | "sentinel"> }
+	| { type: "workerLaunched"; facts: Pick<ChildRalphSessionWorkerEvidence, "workerLaunchedAt"> }
+	| {
+			type: "workerExited";
+			facts: Pick<ChildRalphSessionWorkerEvidence, "workerExitedAt"> &
+				Partial<Pick<ChildRalphSessionWorkerEvidence, "workerExitCode">>;
+	  };
+
 export function assertInsideHerdr(): void {
 	if (process.env.HERDR_ENV !== "1") throw new Error("/ralph orchestrate requires HERDR_ENV=1");
 }
 
-export function createChildRalphWorkerScript(input: {
-	issue: number;
-	prompt: string;
-	sentinel?: string;
-}): HerdrWorkerScript {
+function createChildRalphWorkerScript(input: { issue: number; prompt: string; sentinel?: string }): HerdrWorkerScript {
 	const sentinel = input.sentinel ?? `issue-${input.issue}-${Date.now()}`;
 	return {
 		sentinel,
@@ -80,7 +109,47 @@ export async function createWorkerPane(
 	};
 }
 
-export async function runWorkerScriptInPane(
+export async function runChildRalphSessionWorker(
+	pi: ExtensionAPI,
+	spec: ChildRalphSessionWorkerSpec,
+	onEvent?: (event: ChildRalphSessionWorkerEvent) => Promise<void> | void,
+): Promise<ChildRalphSessionWorkerEvidence> {
+	const now = spec.now ?? (() => new Date().toISOString());
+	const worker = createChildRalphWorkerScript({ issue: spec.issue, prompt: spec.prompt });
+	const scriptPath = path.join(ralphDir(spec.cwd), `${spec.orchestrationName}-issue-${spec.issue}.worker.sh`);
+	await mkdir(path.dirname(scriptPath), { recursive: true });
+	await writeFile(scriptPath, worker.content, "utf8");
+	await chmod(scriptPath, 0o755);
+	const workerScript = path.relative(spec.cwd, scriptPath);
+	await onEvent?.({ type: "workerScriptWritten", facts: { workerScript, sentinel: worker.sentinel } });
+
+	let workerLaunchedAt = "";
+	const run = await runWorkerScriptInPane(pi, spec.cwd, {
+		paneId: spec.paneId,
+		scriptPath,
+		sentinel: worker.sentinel,
+		timeoutMs: spec.timeoutMs,
+		tailLines: spec.tailLines,
+		onLaunched: async () => {
+			workerLaunchedAt = now();
+			await onEvent?.({ type: "workerLaunched", facts: { workerLaunchedAt } });
+		},
+	});
+	const workerExitedAt = now();
+	const workerExitCode = run.exitCode;
+	await onEvent?.({ type: "workerExited", facts: { workerExitedAt, workerExitCode } });
+	return {
+		workerScript,
+		workerLaunchedAt,
+		workerExitedAt,
+		workerExitCode,
+		paneTail: run.tail,
+		exited: run.exited,
+		sentinel: worker.sentinel,
+	};
+}
+
+async function runWorkerScriptInPane(
 	pi: ExtensionAPI,
 	cwd: string,
 	spec: HerdrWorkerRunSpec,
@@ -145,7 +214,7 @@ export async function sendKeys(pi: ExtensionAPI, cwd: string, paneId: string, ke
 	await pi.exec("herdr", ["pane", "send-keys", paneId, keys], { cwd, timeout: 10_000 });
 }
 
-export function parseWorkerExitCode(paneTail: string, sentinel: string): number | undefined {
+function parseWorkerExitCode(paneTail: string, sentinel: string): number | undefined {
 	const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const match = paneTail.match(
 		new RegExp(`RALPH_WORKER_EXIT\\s+issue=\\d+\\s+code=(\\d+)\\s+sentinel=${escapedSentinel}`),

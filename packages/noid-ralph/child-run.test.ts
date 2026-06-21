@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type ChildRunAdapters, type ChildRunProgress, runChildIssue, verifyClosedChildRun } from "./child-run";
-import type { HerdrWorkerRunSpec } from "./herdr-runner";
+import type { ChildRalphSessionWorkerSpec } from "./herdr-runner";
 import type { OrchestrateIssueRun } from "./orchestrate-types";
 import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
@@ -37,12 +37,10 @@ type AdapterOptions = {
 };
 
 function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & {
-	scripts: string[];
-	workerRuns: HerdrWorkerRunSpec[];
+	workerRuns: ChildRalphSessionWorkerSpec[];
 } {
 	let revParseCount = 0;
-	const scripts: string[] = [];
-	const workerRuns: HerdrWorkerRunSpec[] = [];
+	const workerRuns: ChildRalphSessionWorkerSpec[] = [];
 	const childState: MattRalphState = {
 		schemaVersion: MATT_RALPH_SCHEMA_VERSION,
 		name: "placeholder",
@@ -58,28 +56,34 @@ function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & {
 		orchestrationChildLink: link,
 		...options.childState,
 	};
+	const now = (() => {
+		let tick = 0;
+		return () => `2026-01-01T00:00:0${tick++}.000Z`;
+	})();
 	return {
-		scripts,
 		workerRuns,
-		now: (() => {
-			let tick = 0;
-			return () => `2026-01-01T00:00:0${tick++}.000Z`;
-		})(),
+		now,
 		git: async (args) => {
 			if (args[0] === "rev-parse") return revParseCount++ === 0 ? "head-before" : "head-after";
 			if (args[0] === "log") return options.commits ?? "abc123 commit one";
 			throw new Error(`unexpected git args: ${args.join(" ")}`);
 		},
-		writeWorkerScript: async (_file, content) => {
-			scripts.push(content);
-		},
-		runWorkerScript: async (spec) => {
+		runChildRalphSession: async (spec, onEvent) => {
 			workerRuns.push(spec);
-			await spec.onLaunched?.();
+			const workerScript = ".ralph/orchestrate-issue-42-abc123-issue-34.worker.sh";
+			await onEvent?.({ type: "workerScriptWritten", facts: { workerScript, sentinel: "sentinel-1" } });
+			const workerLaunchedAt = now();
+			await onEvent?.({ type: "workerLaunched", facts: { workerLaunchedAt } });
+			const workerExitedAt = now();
+			await onEvent?.({ type: "workerExited", facts: { workerExitedAt, workerExitCode: 0 } });
 			return {
+				workerScript,
+				workerLaunchedAt,
+				workerExitedAt,
+				workerExitCode: 0,
+				paneTail: "some output\nRALPH_WORKER_EXIT issue=34 code=0 sentinel=sentinel-1\n",
 				exited: options.workerExited ?? true,
-				exitCode: 0,
-				tail: `some output\nRALPH_WORKER_EXIT issue=34 code=0 sentinel=${spec.sentinel}\n`,
+				sentinel: "sentinel-1",
 			};
 		},
 		findRalphSession: async (sessionName) => ({ ...childState, name: sessionName }),
@@ -139,13 +143,14 @@ describe("child run", () => {
 			headAfter: "head-after",
 			commits: ["abc123 commit one"],
 		});
-		expect(adapters.scripts[0]).toContain(
-			"/ralph implement #34 --exit-on-complete --ignore-ralph-dirty --session-suffix orchestrate-issue-42-abc123-1-issue-34 --orchestrator-name orchestrate-issue-42-abc123 --orchestrator-parent-issue 42 --orchestrator-child-issue 34 --orchestrator-issue-run-index 0 --orchestrator-state-path /repo/.ralph/orchestrate-issue-42-abc123.state.json",
-		);
 		expect(adapters.workerRuns[0]).toMatchObject({
+			cwd: "/repo",
 			paneId: "pane-1",
-			scriptPath: "/repo/.ralph/orchestrate-issue-42-abc123-issue-34.worker.sh",
+			orchestrationName: "orchestrate-issue-42-abc123",
+			issue: 34,
 			timeoutMs: 120_000,
+			prompt:
+				"/ralph implement #34 --exit-on-complete --ignore-ralph-dirty --session-suffix orchestrate-issue-42-abc123-1-issue-34 --orchestrator-name orchestrate-issue-42-abc123 --orchestrator-parent-issue 42 --orchestrator-child-issue 34 --orchestrator-issue-run-index 0 --orchestrator-state-path /repo/.ralph/orchestrate-issue-42-abc123.state.json",
 		});
 	});
 
