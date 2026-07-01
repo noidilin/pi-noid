@@ -56,6 +56,8 @@ export function formatIssue(issue: SkillCatalogIssue) {
 			return `${issue.skill} is not assigned to any group`;
 		case "stale-disabled-skill":
 			return `state disables unknown/stale skill: ${issue.skill}`;
+		case "protected-project-skill-disabled":
+			return `state disables project skill that is always loaded: ${issue.skill}`;
 		case "stale-selected-skill-set":
 			return `selectedSkillSet ${formatSelectedSkillSet(issue.selectedSkillSet)} does not match effective state: ${formatSelectedSkillSet(issue.current)}`;
 		case "duplicate-discovered-skill":

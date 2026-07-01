@@ -51,13 +51,19 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 		)
 			? " ⚠"
 			: "";
-		skillManagerStatusText = `skills: ${formatEffectiveSkillSet(catalog.effectiveSkillSet)}${suffix}${warning}`;
+		const projectSuffix = catalog.protectedProjectSkillNames.length > 0 ? ` +${catalog.protectedProjectSkillNames.length}p` : "";
+		skillManagerStatusText = `skills: ${formatEffectiveSkillSet(catalog.effectiveSkillSet)}${suffix}${projectSuffix}${warning}`;
 		ctx.ui.setStatus("skill-manager", undefined);
 		notifyBarChanged();
 	}
 
 	async function saveAndRefresh(ctx: ExtensionContext) {
 		await state.queueSave(ctx);
+		await updateStatus(ctx);
+	}
+
+	async function saveGroupsAndRefresh(groups: Record<string, string[]>, ctx: ExtensionContext) {
+		await groupsStore.save(groups);
 		await updateStatus(ctx);
 	}
 
@@ -75,12 +81,13 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 			ctx,
 			catalog,
 			state: stateGateway(ctx, catalog),
+			saveGroups: (groups) => saveGroupsAndRefresh(groups, ctx),
 		});
 	}
 
 	pi.registerCommand("skm", {
 		description: "Manage skills loaded into model context",
-		argumentHint: "[list|groups|doctor|all|none|enable|disable|only] [skill|@group...]",
+		argumentHint: "[doctor]",
 		getArgumentCompletions: async (argumentPrefix: string) => {
 			await state.load();
 			return getSkillManagerCompletions(argumentPrefix, await getCatalog());
@@ -93,7 +100,6 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 				ctx,
 				args,
 				catalog,
-				state: stateGateway(ctx, catalog),
 				showSelector: () => showSelector(ctx),
 			});
 		},
@@ -109,7 +115,12 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 		const skills = event.systemPromptOptions.skills ?? [];
 		await updateStatus(ctx);
 		if (stateSnapshot.disabledSkills.size === 0 || skills.length === 0) return;
-		const result = applySkillFilter(event.systemPrompt, skills, stateSnapshot.disabledSkills);
+		const catalog = await getCatalog();
+		const effectiveDisabledSkills = new Set(
+			Array.from(stateSnapshot.disabledSkills).filter((name) => !catalog.protectedProjectSkillNames.includes(name)),
+		);
+		if (effectiveDisabledSkills.size === 0) return;
+		const result = applySkillFilter(event.systemPrompt, skills, effectiveDisabledSkills);
 		if (!result.changed && !promptFilterWarned) {
 			promptFilterWarned = true;
 			ctx.ui.notify(
@@ -125,8 +136,10 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 		const match = event.text.match(/(?:^|\s)\/skill:([^\s]+)\b/);
 		if (!match) return { action: "continue" as const };
 		const skillName = match[1];
+		const catalog = await getCatalog();
+		if (catalog.protectedProjectSkillNames.includes(skillName)) return { action: "continue" as const };
 		if (!stateSnapshot.disabledSkills.has(skillName)) return { action: "continue" as const };
-		ctx.ui.notify(`Skill disabled: ${skillName}. Re-enable with /skm enable ${skillName}`, "warning");
+		ctx.ui.notify(`Skill disabled: ${skillName}. Re-enable it from /skm.`, "warning");
 		return { action: "handled" as const };
 	});
 }

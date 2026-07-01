@@ -1,4 +1,5 @@
 import { createSkillCatalog, type SkillCatalog } from "./catalog";
+import { isProjectSkill } from "./types";
 import type { SelectedSkillSet } from "./types";
 
 export interface StoredSkillManagerSelection {
@@ -73,7 +74,7 @@ export function transitionSkillSelection(
 
 	if (intent.type === "none") {
 		disabledSkills.clear();
-		for (const skill of catalog.skills) disabledSkills.add(skill.name);
+		for (const skill of catalog.skills) if (!isProjectSkill(skill)) disabledSkills.add(skill.name);
 		return success(disabledSkills, { kind: "none" }, "none-enabled", before, catalog.skills.length);
 	}
 
@@ -87,7 +88,8 @@ export function transitionSkillSelection(
 
 	if (intent.type === "only") {
 		disabledSkills.clear();
-		for (const skill of catalog.skills) if (!targets.names.includes(skill.name)) disabledSkills.add(skill.name);
+		for (const skill of catalog.skills)
+			if (!isProjectSkill(skill) && !targets.names.includes(skill.name)) disabledSkills.add(skill.name);
 		return success(
 			disabledSkills,
 			selectedSkillSetForOnly(intent.targets),
@@ -103,16 +105,23 @@ export function transitionSkillSelection(
 	}
 
 	if (intent.type === "disable") {
-		for (const name of targets.names) disabledSkills.add(name);
+		for (const name of disableableNames(targets.names, catalog)) disabledSkills.add(name);
 		return success(disabledSkills, undefined, "targets-disabled", before, targets.names.length, catalog);
 	}
 
 	for (const target of intent.targets) {
 		const names = catalog.expandTargets([target]).names;
 		const shouldEnable = names.some((name) => disabledSkills.has(name));
-		for (const name of names) shouldEnable ? disabledSkills.delete(name) : disabledSkills.add(name);
+		for (const name of disableableNames(names, catalog)) shouldEnable ? disabledSkills.delete(name) : disabledSkills.add(name);
 	}
 	return success(disabledSkills, undefined, "targets-toggled", before, targets.names.length, catalog);
+}
+
+function disableableNames(names: string[], catalog: SkillCatalog) {
+	return names.filter((name) => {
+		const skill = catalog.skillsByName.get(name);
+		return skill && !isProjectSkill(skill);
+	});
 }
 
 function success(

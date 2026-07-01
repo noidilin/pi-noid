@@ -1,3 +1,4 @@
+import { isProjectSkill } from "./types";
 import type {
 	EffectiveSkillSet,
 	ExpandTargetsResult,
@@ -28,6 +29,8 @@ export interface SkillCatalog {
 	memberships: ReadonlyMap<string, string[]>;
 	persistedDisabledSkillNames: string[];
 	staleDisabledSkillNames: string[];
+	protectedProjectSkillNames: string[];
+	protectedDisabledProjectSkillNames: string[];
 	enabledSkills: SkillItem[];
 	disabledSkills: SkillItem[];
 	enabledSkillNames: string[];
@@ -44,14 +47,24 @@ export function createSkillCatalog(input: SkillCatalogInput): SkillCatalog {
 	const { skills, skillsByName } = normalizeSkills(input.skills, issues);
 	const rawGroupRows = normalizeGroupConfig(input.groupsConfig);
 	const skillNames = new Set(skills.map((skill) => skill.name));
+	const protectedProjectSkillNames = skills.filter(isProjectSkill).map((skill) => skill.name).sort();
+	const protectedProjectSkillNameSet = new Set(protectedProjectSkillNames);
 	const persistedDisabledSkillNames = Array.from(input.disabledSkills).sort();
 	const staleDisabledSkillNames = persistedDisabledSkillNames.filter((name) => !skillNames.has(name));
+	const protectedDisabledProjectSkillNames = persistedDisabledSkillNames.filter((name) =>
+		protectedProjectSkillNameSet.has(name),
+	);
+	const effectiveDisabledSkills = new Set(
+		persistedDisabledSkillNames.filter((name) => !protectedProjectSkillNameSet.has(name)),
+	);
 	for (const skill of staleDisabledSkillNames) issues.push({ kind: "stale-disabled-skill", skill });
+	for (const skill of protectedDisabledProjectSkillNames)
+		issues.push({ kind: "protected-project-skill-disabled", skill });
 
 	const groupRows = rawGroupRows
 		.map(({ name, rawMembers, stringMembers }) => {
 			const discoveredMembers = Array.from(new Set(stringMembers.filter((member) => skillNames.has(member)))).sort();
-			const enabledCount = discoveredMembers.filter((member) => !input.disabledSkills.has(member)).length;
+			const enabledCount = discoveredMembers.filter((member) => !effectiveDisabledSkills.has(member)).length;
 			const state =
 				discoveredMembers.length === 0 || enabledCount === 0
 					? "disabled"
@@ -92,8 +105,8 @@ export function createSkillCatalog(input: SkillCatalogInput): SkillCatalog {
 		if (!memberships.has(skill.name)) issues.push({ kind: "unassigned-skill", skill: skill.name });
 	reportDuplicateGroupSkillSets(groupRows, issues);
 
-	const enabledSkills = skills.filter((skill) => !input.disabledSkills.has(skill.name));
-	const disabledSkills = skills.filter((skill) => input.disabledSkills.has(skill.name));
+	const enabledSkills = skills.filter((skill) => !effectiveDisabledSkills.has(skill.name));
+	const disabledSkills = skills.filter((skill) => effectiveDisabledSkills.has(skill.name));
 	const enabledSkillNames = enabledSkills.map((skill) => skill.name);
 	const disabledSkillNames = disabledSkills.map((skill) => skill.name);
 	const exactMatchSkipped = groupRows.length > EXACT_GROUP_MATCH_LIMIT;
@@ -122,6 +135,8 @@ export function createSkillCatalog(input: SkillCatalogInput): SkillCatalog {
 		memberships,
 		persistedDisabledSkillNames,
 		staleDisabledSkillNames,
+		protectedProjectSkillNames,
+		protectedDisabledProjectSkillNames,
 		enabledSkills,
 		disabledSkills,
 		enabledSkillNames,

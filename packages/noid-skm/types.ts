@@ -17,6 +17,10 @@ export interface SkillItem {
 	scope?: string;
 }
 
+export function isProjectSkill(skill: SkillItem): boolean {
+	return skill.scope === "project";
+}
+
 export type SkillGroups = Record<string, string[]>;
 
 export type StoreLoadSnapshot = { status: "loaded" } | { status: "missing" } | { status: "error"; message: string };
@@ -52,6 +56,7 @@ export type SkillCatalogIssue =
 	| { kind: "skill-in-multiple-groups"; skill: string; groups: string[] }
 	| { kind: "unassigned-skill"; skill: string }
 	| { kind: "stale-disabled-skill"; skill: string }
+	| { kind: "protected-project-skill-disabled"; skill: string }
 	| { kind: "stale-selected-skill-set"; selectedSkillSet: SelectedSkillSet; current: SelectedSkillSet }
 	| { kind: "duplicate-discovered-skill"; skill: string; paths: string[] }
 	| { kind: "duplicate-group-skill-set"; groups: string[]; members: string[] }

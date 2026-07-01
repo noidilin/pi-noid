@@ -9,6 +9,7 @@ export function formatDoctorReport(catalog: SkillCatalog) {
 		`State: ${STATE_PATH}`,
 		`Groups: ${GROUPS_PATH}`,
 		`Discovered skills: ${catalog.skills.length}`,
+		`Project skills always loaded: ${catalog.protectedProjectSkillNames.length ? catalog.protectedProjectSkillNames.join(", ") : "(none)"}`,
 		`Effective group: ${formatEffectiveSkillSet(catalog.effectiveSkillSet)}`,
 		`Effective enabled: ${catalog.enabledSkillNames.length ? catalog.enabledSkillNames.join(", ") : "(none)"}`,
 		`Effective disabled: ${catalog.disabledSkillNames.length ? catalog.disabledSkillNames.join(", ") : "(none)"}`,

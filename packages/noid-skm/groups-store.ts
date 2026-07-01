@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { GROUPS_PATH } from "./paths";
 import type { SkillCatalogIssue, SkillGroups, StoreLoadSnapshot } from "./types";
 
@@ -52,6 +53,13 @@ export class SkillGroupsStore {
 			}
 		}
 		return this.snapshot();
+	}
+
+	async save(groups: SkillGroups): Promise<void> {
+		const normalized = normalizeSkillGroupsConfig(groups);
+		await mkdir(dirname(GROUPS_PATH), { recursive: true });
+		await writeFile(GROUPS_PATH, `${JSON.stringify(normalized.groups, null, 2)}\n`, "utf8");
+		this.snapshotValue = { ...normalized, load: { status: "loaded" } };
 	}
 
 	snapshot(): SkillGroupsSnapshot {
