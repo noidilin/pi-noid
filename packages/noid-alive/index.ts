@@ -26,7 +26,7 @@ export default function aliveExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("aws-alive", {
 		description: "List AWS resources alive in your currently authenticated AWS account",
-		argumentHint: "[--profile name] [--region region|--all-regions] [service-filter] [--limit n]",
+		argumentHint: "[--profile name] [--region region|--all-regions] [supported-service-filter] [--limit n]",
 		getArgumentCompletions: (argumentPrefix: string) => getAliveCompletions(pi, process.cwd(), argumentPrefix),
 		handler: showAliveServices,
 	} as any);
@@ -43,7 +43,10 @@ export default function aliveExtension(pi: ExtensionAPI) {
 			profile: Type.Optional(Type.String({ description: "Optional AWS CLI profile, such as my-sso-profile." })),
 			region: Type.Optional(Type.String({ description: "Optional AWS region id, such as us-east-1." })),
 			service: Type.Optional(
-				Type.String({ description: "Optional service filter, such as ec2, s3, lambda, rds, apigateway, or sqs." }),
+				Type.String({
+					description:
+						"Optional supported service filter. Supported: apigateway, apigatewayv2, cloudformation, cloudfront, cloudwatch, dynamodb, ec2, ecr, ecs, eks, elb, elbv2, events, kms, lambda, logs, rds, route53, s3, secretsmanager, sns, sqs, ssm. Unsupported filters return immediately with a supported-list message.",
+				}),
 			),
 			allRegions: Type.Optional(
 				Type.Boolean({ description: "Scan every AWS region returned by EC2 describe-regions." }),

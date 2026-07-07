@@ -29,6 +29,12 @@ export type AliveResult = {
 	errors: string[];
 };
 
+type ProbeDescriptor = {
+	service: string;
+	label: string;
+	aliases?: readonly string[];
+};
+
 type ExecResult = {
 	code: number;
 	stdout: string;
@@ -45,6 +51,7 @@ const GLOBAL_PROBES = [
 	{
 		service: "s3",
 		label: "S3 buckets",
+		aliases: ["s3api", "simple storage service"],
 		args: ["s3api", "list-buckets", "--query", "Buckets[].Name"],
 	},
 	{
@@ -55,6 +62,7 @@ const GLOBAL_PROBES = [
 	{
 		service: "route53",
 		label: "Route 53 hosted zones",
+		aliases: ["route 53", "hosted zone", "hosted zones"],
 		args: ["route53", "list-hosted-zones", "--query", "HostedZones[].Name"],
 	},
 ] as const;
@@ -125,11 +133,13 @@ const REGIONAL_PROBES = [
 	{
 		service: "elb",
 		label: "Classic Load Balancers",
+		aliases: ["elasticloadbalancing", "elastic load balancing", "classic load balancer"],
 		args: ["elb", "describe-load-balancers", "--query", "LoadBalancerDescriptions[].LoadBalancerName"],
 	},
 	{
 		service: "elbv2",
 		label: "Application/Network Load Balancers",
+		aliases: ["elasticloadbalancingv2", "elastic load balancing v2", "alb", "nlb", "load balancer"],
 		args: ["elbv2", "describe-load-balancers", "--query", "LoadBalancers[].LoadBalancerName"],
 	},
 	{
@@ -220,14 +230,26 @@ export async function getAliveAwsServices(
 	options: AliveOptions,
 	onProgress?: (command: string) => void,
 ): Promise<AliveResult> {
-	const execAws = createAwsExec(pi, cwd, options, onProgress);
 	const errors: string[] = [];
+	if (options.service && !hasMatchingProbe(options.service)) {
+		return {
+			profile: options.profile,
+			regions: [],
+			groups: [],
+			errors: [
+				`Unsupported service filter "${options.service}". Supported filters: ${supportedServiceFilters().join(", ")}.`,
+			],
+		};
+	}
+
+	const execAws = createAwsExec(pi, cwd, options, onProgress);
 	const identity = await getIdentity(execAws, errors);
 	const regions = await resolveRegions(execAws, options, errors);
 	const groups: AliveServiceGroup[] = [];
 
 	for (const probe of GLOBAL_PROBES) {
-		if (!shouldProbe(probe.service, probe.label, options.service)) continue;
+		const aliases = "aliases" in probe ? probe.aliases : [];
+		if (!shouldProbe(probe.service, probe.label, options.service, aliases)) continue;
 		const resources = await probeJsonArray(execAws, [...probe.args], errors);
 		if (resources.length > 0) {
 			groups.push(limitGroup({ service: probe.service, label: probe.label, region: "global", resources }, options));
@@ -236,7 +258,8 @@ export async function getAliveAwsServices(
 
 	for (const region of regions) {
 		for (const probe of REGIONAL_PROBES) {
-			if (!shouldProbe(probe.service, probe.label, options.service)) continue;
+			const aliases = "aliases" in probe ? probe.aliases : [];
+			if (!shouldProbe(probe.service, probe.label, options.service, aliases)) continue;
 			const resources = await probeJsonArray(execAws, [...probe.args, "--region", region], errors);
 			if (resources.length > 0) {
 				groups.push(limitGroup({ service: probe.service, label: probe.label, region, resources }, options));
@@ -274,7 +297,11 @@ export function formatAliveResult(result: AliveResult): string {
 	];
 
 	if (result.groups.length === 0) {
-		lines.push("No matching running/deployed AWS resources found.");
+		if (result.errors.some((error) => error.startsWith("Unsupported service filter"))) {
+			lines.push("No scan run because the requested service filter is not supported by this extension.");
+		} else {
+			lines.push("No matching running/deployed AWS resources found.");
+		}
 	} else {
 		for (const region of orderedRegions(result.groups)) {
 			lines.push(`## ${region === "global" ? "Global services" : region}`, "");
@@ -414,10 +441,43 @@ function limitGroup(group: AliveServiceGroup, options: AliveOptions): AliveServi
 	return { ...group, resources: group.resources.slice(0, limit) };
 }
 
-function shouldProbe(service: string, label: string, filter: string | undefined): boolean {
+function shouldProbe(
+	service: string,
+	label: string,
+	filter: string | undefined,
+	aliases: readonly string[] = [],
+): boolean {
 	if (!filter) return true;
-	const normalized = filter.toLowerCase();
-	return service.includes(normalized) || label.toLowerCase().includes(normalized);
+	return matchesProbe({ service, label, aliases }, filter);
+}
+
+function hasMatchingProbe(filter: string): boolean {
+	return allProbeDescriptors().some((probe) => matchesProbe(probe, filter));
+}
+
+function allProbeDescriptors(): ProbeDescriptor[] {
+	return [...GLOBAL_PROBES, ...REGIONAL_PROBES, { service: "ecs", label: "ECS running services and tasks" }];
+}
+
+function matchesProbe(probe: ProbeDescriptor, filter: string): boolean {
+	const normalized = normalizeFilter(filter);
+	if (!normalized) return true;
+	return [probe.service, probe.label, ...(probe.aliases ?? [])]
+		.map(normalizeFilter)
+		.some((candidate) => candidate.includes(normalized) || normalized.includes(candidate));
+}
+
+function supportedServiceFilters(): string[] {
+	return allProbeDescriptors()
+		.map((probe) => probe.service)
+		.sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeFilter(value: string): string {
+	return value
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "")
+		.trim();
 }
 
 function isAwsRegionId(value: string): boolean {

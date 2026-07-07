@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAliveResult, parseAliveArgs } from "./aws-cli";
+import { formatAliveResult, getAliveAwsServices, parseAliveArgs } from "./aws-cli";
 
 describe("personal alive AWS CLI helpers", () => {
 	it("parses profile, region, service filter, and limit", () => {
@@ -17,6 +17,23 @@ describe("personal alive AWS CLI helpers", () => {
 			service: "lambda",
 			allRegions: true,
 		});
+	});
+
+	it("returns immediately for unsupported service filters", async () => {
+		const result = await getAliveAwsServices(
+			{
+				exec: async () => {
+					throw new Error("AWS CLI should not be called for unsupported filters");
+				},
+			} as any,
+			"/tmp",
+			{ service: "iam" },
+		);
+
+		expect(result.groups).toEqual([]);
+		expect(result.regions).toEqual([]);
+		expect(result.errors[0]).toContain('Unsupported service filter "iam"');
+		expect(formatAliveResult(result)).toContain("No scan run");
 	});
 
 	it("formats discovered resources", () => {
