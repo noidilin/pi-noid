@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -26,6 +26,7 @@ import {
 	sanitizeSessionName,
 } from "./loop-store";
 import { orchestrate } from "./orchestrate";
+import { ensureRalphStateStorage } from "./ralph-state-storage";
 import type { ChildIssue, MattRalphState } from "./types";
 
 export default function mattRalphExtension(pi: ExtensionAPI) {
@@ -67,6 +68,13 @@ export default function mattRalphExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.on("tool_call", async (event, ctx) => {
+		if (!isToolCallEventType("bash", event)) return;
+		if (!hasGitCommit(event.input.command)) return;
+		event.input.command = protectRalphGitCommitCommand(event.input.command);
+		ctx.ui.notify("Matt Ralph will unstage .ralph before git commit.", "info");
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		const state = await getActiveState(ctx.cwd);
 		if (!state) return;
@@ -86,9 +94,20 @@ export default function mattRalphExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		currentCwd = ctx.cwd;
+		await ensureRalphStateStorage(ctx.cwd);
 		const state = await getActiveState(ctx.cwd);
 		updateMattRalphUI(ctx, state);
 	});
+}
+
+export function hasGitCommit(command: string): boolean {
+	return /\bgit\s+commit\b/.test(command);
+}
+
+export function protectRalphGitCommitCommand(command: string): string {
+	const guard =
+		"{ git restore --staged -- .ralph 2>/dev/null || true; git rm --cached -r --ignore-unmatch .ralph 2>/dev/null || true; } && ";
+	return command.replace(/\bgit\s+commit\b/g, `${guard}git commit`);
 }
 
 async function getRalphCompletions(argumentPrefix: string, cwd: string): Promise<AutocompleteItem[] | null> {

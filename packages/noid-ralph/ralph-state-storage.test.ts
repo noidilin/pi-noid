@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
 	archiveRalphStateFiles,
 	deleteRalphNote,
 	deleteRalphState,
+	ensureRalphStateStorage,
 	getActiveRalphStateName,
 	listRalphStateRecords,
 	notePathFor,
@@ -51,6 +52,20 @@ describe("Ralph state storage", () => {
 		expect(records).toHaveLength(2);
 		expect(records[0]).toMatchObject({ kind: "state", state: { name: "example-one" } });
 		expect(records[1]).toMatchObject({ kind: "unsupported", name: "example-old" });
+	});
+
+	it("keeps Ralph storage out of git by default", async () => {
+		const cwd = await tempRepo();
+		await mkdir(path.join(cwd, ".git", "info"), { recursive: true });
+		await writeFile(path.join(cwd, ".git", "info", "exclude"), "node_modules/\n", "utf8");
+
+		await ensureRalphStateStorage(cwd);
+		await ensureRalphStateStorage(cwd);
+
+		expect(await readFile(path.join(cwd, ".ralph", ".gitignore"), "utf8")).toBe("*\n!.gitignore\n");
+		expect(await readFile(path.join(cwd, ".git", "info", "exclude"), "utf8")).toBe(
+			"node_modules/\n\n# Matt Ralph internal orchestration state\n.ralph/\n",
+		);
 	});
 
 	it("owns active markers, notes, deletion, and archive moves", async () => {

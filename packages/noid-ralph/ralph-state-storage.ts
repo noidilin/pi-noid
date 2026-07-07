@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -33,6 +33,19 @@ export function notePathFor(cwd: string, name: string, options: RalphStateFileOp
 
 export async function ensureRalphStateStorage(cwd: string): Promise<void> {
 	await mkdir(ralphArchiveDir(cwd), { recursive: true });
+	await ensureRalphGitIgnores(cwd);
+}
+
+export async function ensureRalphGitIgnores(cwd: string): Promise<void> {
+	await writeFile(path.join(ralphDir(cwd), ".gitignore"), "*\n!.gitignore\n", "utf8");
+	const repository = await findGitRepository(cwd);
+	if (!repository) return;
+	const relativeRalphDir = toGitPath(path.relative(repository.workTree, ralphDir(cwd))) || ".ralph";
+	await appendUniqueLine(
+		path.join(repository.gitDir, "info", "exclude"),
+		`${relativeRalphDir}/`,
+		`\n# Matt Ralph internal orchestration state\n${relativeRalphDir}/\n`,
+	);
 }
 
 export async function writeRalphState<TState extends { name: string }>(
@@ -41,6 +54,7 @@ export async function writeRalphState<TState extends { name: string }>(
 	state: TState,
 	options: RalphStateFileOptions = {},
 ): Promise<void> {
+	await ensureRalphStateStorage(cwd);
 	await mkdir(options.archive ? ralphArchiveDir(cwd) : ralphDir(cwd), { recursive: true });
 	await writeFile(statePathFor(cwd, name, options), `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
@@ -107,6 +121,7 @@ export async function appendRalphNote(
 	markdown: string,
 	options: RalphStateFileOptions = {},
 ): Promise<void> {
+	await ensureRalphStateStorage(cwd);
 	await mkdir(options.archive ? ralphArchiveDir(cwd) : ralphDir(cwd), { recursive: true });
 	const file = notePathFor(cwd, name, options);
 	const current = existsSync(file) ? await readFile(file, "utf8") : "";
@@ -127,6 +142,40 @@ export async function archiveRalphStateFiles(cwd: string, name: string): Promise
 	if (existsSync(sourceState)) await rename(sourceState, statePathFor(cwd, name, { archive: true }));
 	const sourceNote = notePathFor(cwd, name);
 	if (existsSync(sourceNote)) await rename(sourceNote, notePathFor(cwd, name, { archive: true }));
+}
+
+type GitRepository = { workTree: string; gitDir: string };
+
+async function findGitRepository(cwd: string): Promise<GitRepository | undefined> {
+	let current = path.resolve(cwd);
+	while (true) {
+		const dotGit = path.join(current, ".git");
+		if (existsSync(dotGit)) {
+			const gitDir = statSync(dotGit).isDirectory() ? dotGit : await readGitFileGitDir(dotGit, current);
+			if (gitDir) return { workTree: current, gitDir };
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+async function readGitFileGitDir(dotGitFile: string, workTree: string): Promise<string | undefined> {
+	const content = await readFile(dotGitFile, "utf8").catch(() => "");
+	const match = content.match(/^gitdir:\s*(.+)\s*$/m);
+	if (!match) return undefined;
+	return path.resolve(workTree, match[1]);
+}
+
+async function appendUniqueLine(file: string, line: string, block: string): Promise<void> {
+	await mkdir(path.dirname(file), { recursive: true });
+	const current = existsSync(file) ? await readFile(file, "utf8") : "";
+	if (current.split(/\r?\n/).includes(line)) return;
+	await writeFile(file, `${current}${current.endsWith("\n") || current.length === 0 ? "" : "\n"}${block}`, "utf8");
+}
+
+function toGitPath(value: string): string {
+	return value.split(path.sep).filter(Boolean).join("/");
 }
 
 function recordStartedAt<TState>(
