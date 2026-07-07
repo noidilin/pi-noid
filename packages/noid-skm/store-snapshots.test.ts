@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createSkillCatalog } from "./catalog.ts";
+import { getGlobalAgentSkills } from "./global-skills.ts";
 import { normalizeSkillGroupsConfig } from "./groups-store.ts";
 import { normalizeSkillManagerStateConfig } from "./state-store.ts";
-import { getGlobalAgentSkills } from "./global-skills.ts";
 import { transitionSkillSelection } from "./state-transition.ts";
 
 test("groups snapshot normalization accepts missing and valid config", () => {
@@ -89,7 +89,11 @@ test("global agent skill helper detects user skill roots", () => {
 	assert.deepEqual(
 		getGlobalAgentSkills([
 			{ name: "deploy", scope: "user", path: `${home}/.agents/skills/deploy/SKILL.md` },
-			{ name: "project-local", scope: "project", path: `${home}/work/project/.agents/skills/project-local/SKILL.md` },
+			{
+				name: "project-local",
+				scope: "project",
+				path: `${home}/work/project/.agents/skills/project-local/SKILL.md`,
+			},
 			{ name: "pi-global", scope: "user", path: `${home}/.pi/agent/skills/pi-global/SKILL.md` },
 		]).map((skill) => skill.name),
 		["deploy", "pi-global"],

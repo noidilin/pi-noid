@@ -132,7 +132,10 @@ export async function showSkillSelector(input: {
 		}
 		function move(delta: number) {
 			if (categorizeSkillName) {
-				categorizeGroupIndex = Math.max(0, Math.min(categorizeGroupIndex + delta, Math.max(0, categorizableGroupRows().length - 1)));
+				categorizeGroupIndex = Math.max(
+					0,
+					Math.min(categorizeGroupIndex + delta, Math.max(0, categorizableGroupRows().length - 1)),
+				);
 				return;
 			}
 			if (activePane === "groups")
@@ -147,8 +150,13 @@ export async function showSkillSelector(input: {
 				return;
 			}
 			categorizeSkillName = skill.name;
-			const currentGroup = currentCatalog().memberships.get(skill.name)?.find((name) => name !== UNCATEGORIZED_GROUP);
-			categorizeGroupIndex = Math.max(0, categorizableGroupRows().findIndex((row) => row.name === currentGroup));
+			const currentGroup = currentCatalog()
+				.memberships.get(skill.name)
+				?.find((name) => name !== UNCATEGORIZED_GROUP);
+			categorizeGroupIndex = Math.max(
+				0,
+				categorizableGroupRows().findIndex((row) => row.name === currentGroup),
+			);
 		}
 		function categorizableGroupRows() {
 			return currentGroupRows().filter((row) => row.name !== PROJECT_GROUP && row.name !== UNCATEGORIZED_GROUP);
@@ -269,7 +277,13 @@ export async function showSkillSelector(input: {
 					for (let i = 0; i < Math.max(2, visible.length); i++) {
 						const row = visible[i];
 						const selected = i === categorizeGroupIndex;
-						lines.push(framed(row ? `${selected ? "›" : " "} @${row.name} ${row.totalDiscovered} skills` : "", "", minWidth));
+						lines.push(
+							framed(
+								row ? `${selected ? "›" : " "} @${row.name} ${row.totalDiscovered} skills` : "",
+								"",
+								minWidth,
+							),
+						);
 					}
 				} else if (skill) {
 					const desc = skill.description ? ` — ${skill.description}` : "";
@@ -351,10 +365,17 @@ function categorizeInGroups(groups: SkillGroups, skillName: string, groupName: s
 	return next;
 }
 
-function withSyntheticGroups(skills: SkillItem[], groups: SkillGroups, disabledSkills: ReadonlySet<string>): SkillGroups {
+function withSyntheticGroups(
+	skills: SkillItem[],
+	groups: SkillGroups,
+	disabledSkills: ReadonlySet<string>,
+): SkillGroups {
 	const baseGroups = stripSyntheticGroups(groups);
 	const baseCatalog = createSkillCatalog({ skills, groupsConfig: baseGroups, disabledSkills });
-	const projectSkills = skills.filter(isProjectSkill).map((skill) => skill.name).sort();
+	const projectSkills = skills
+		.filter(isProjectSkill)
+		.map((skill) => skill.name)
+		.sort();
 	const uncategorized = getGlobalAgentSkills(skills)
 		.filter((skill) => !baseCatalog.memberships.has(skill.name))
 		.map((skill) => skill.name)
@@ -374,5 +395,7 @@ function stripSyntheticGroups(groups: SkillGroups): SkillGroups {
 }
 
 function cloneGroups(groups: SkillGroups): SkillGroups {
-	return Object.fromEntries(Object.entries(groups).map(([group, members]) => [group, [...members].sort()])) as SkillGroups;
+	return Object.fromEntries(
+		Object.entries(groups).map(([group, members]) => [group, [...members].sort()]),
+	) as SkillGroups;
 }

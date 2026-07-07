@@ -1,4 +1,3 @@
-import { isProjectSkill } from "./types";
 import type {
 	EffectiveSkillSet,
 	ExpandTargetsResult,
@@ -8,6 +7,7 @@ import type {
 	SkillGroups,
 	SkillItem,
 } from "./types";
+import { isProjectSkill } from "./types";
 
 const EXACT_GROUP_MATCH_LIMIT = 20;
 const SCOPE_PRIORITY: Record<string, number> = { project: 0, user: 1, temporary: 2 };
@@ -47,7 +47,10 @@ export function createSkillCatalog(input: SkillCatalogInput): SkillCatalog {
 	const { skills, skillsByName } = normalizeSkills(input.skills, issues);
 	const rawGroupRows = normalizeGroupConfig(input.groupsConfig);
 	const skillNames = new Set(skills.map((skill) => skill.name));
-	const protectedProjectSkillNames = skills.filter(isProjectSkill).map((skill) => skill.name).sort();
+	const protectedProjectSkillNames = skills
+		.filter(isProjectSkill)
+		.map((skill) => skill.name)
+		.sort();
 	const protectedProjectSkillNameSet = new Set(protectedProjectSkillNames);
 	const persistedDisabledSkillNames = Array.from(input.disabledSkills).sort();
 	const staleDisabledSkillNames = persistedDisabledSkillNames.filter((name) => !skillNames.has(name));

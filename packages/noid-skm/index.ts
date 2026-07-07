@@ -51,7 +51,8 @@ export default function skillManagerExtension(pi: ExtensionAPI) {
 		)
 			? " ⚠"
 			: "";
-		const projectSuffix = catalog.protectedProjectSkillNames.length > 0 ? ` +${catalog.protectedProjectSkillNames.length}p` : "";
+		const projectSuffix =
+			catalog.protectedProjectSkillNames.length > 0 ? ` +${catalog.protectedProjectSkillNames.length}p` : "";
 		skillManagerStatusText = `skills: ${formatEffectiveSkillSet(catalog.effectiveSkillSet)}${suffix}${projectSuffix}${warning}`;
 		ctx.ui.setStatus("skill-manager", undefined);
 		notifyBarChanged();

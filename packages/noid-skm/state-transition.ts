@@ -1,6 +1,6 @@
 import { createSkillCatalog, type SkillCatalog } from "./catalog";
-import { isProjectSkill } from "./types";
 import type { SelectedSkillSet } from "./types";
+import { isProjectSkill } from "./types";
 
 export interface StoredSkillManagerSelection {
 	disabledSkills: ReadonlySet<string>;
@@ -112,7 +112,8 @@ export function transitionSkillSelection(
 	for (const target of intent.targets) {
 		const names = catalog.expandTargets([target]).names;
 		const shouldEnable = names.some((name) => disabledSkills.has(name));
-		for (const name of disableableNames(names, catalog)) shouldEnable ? disabledSkills.delete(name) : disabledSkills.add(name);
+		for (const name of disableableNames(names, catalog))
+			shouldEnable ? disabledSkills.delete(name) : disabledSkills.add(name);
 	}
 	return success(disabledSkills, undefined, "targets-toggled", before, targets.names.length, catalog);
 }
