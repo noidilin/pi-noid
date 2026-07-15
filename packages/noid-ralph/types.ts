@@ -1,6 +1,30 @@
 export const MATT_RALPH_SCHEMA_VERSION = 2;
 
 export type IssueSource = "native" | "parent-section" | "standalone";
+export type TargetSourceKind = "github" | "prd" | "text";
+
+export type AcceptanceCriterion = {
+	id: string;
+	text: string;
+	source: "section" | "checklist" | "structured";
+};
+
+export type ResolvedImplementationTarget = {
+	key: string;
+	source: TargetSourceKind;
+	title: string;
+	body?: string;
+	issueNumber?: number;
+	parentIssueNumber?: number;
+	state?: "open" | "closed";
+	issueSource?: IssueSource;
+	acceptanceCriteria: AcceptanceCriterion[];
+};
+
+export type ResolvedTargetPlan = {
+	root: ResolvedImplementationTarget;
+	targets: ResolvedImplementationTarget[];
+};
 
 export type ChildIssue = {
 	number: number;
@@ -56,8 +80,3 @@ export type IssueMetadata = {
 		url?: string;
 	};
 };
-
-export type TargetDescriptor =
-	| { kind: "github"; raw: string; number: number }
-	| { kind: "path"; raw: string; path: string }
-	| { kind: "text"; raw: string };

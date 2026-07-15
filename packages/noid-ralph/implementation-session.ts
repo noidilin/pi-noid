@@ -1,17 +1,14 @@
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { FinalizeIssueResult } from "./github";
 import {
 	dirtyStatus,
 	dirtyStatusExcludingRalph,
 	discoverChildren,
-	extractParentFromBody,
 	finalizeIssue,
 	hasCommand,
 	isGitRepo,
-	parseIssueNumber,
 	viewIssue,
 } from "./github";
 import { getActiveState, listStates, readState, sanitizeSessionName, setActiveSession, writeState } from "./loop-store";
@@ -23,7 +20,16 @@ import {
 	buildSystemInjection,
 } from "./prompt";
 import { appendRalphNote, ensureRalphStateStorage, notePathFor } from "./ralph-state-storage";
-import { type ChildIssue, MATT_RALPH_SCHEMA_VERSION, type MattRalphState, type TargetDescriptor } from "./types";
+import {
+	finalizeTargetPlan,
+	formatTargetFinalizationNotice,
+	resolveTargetPlan,
+	type TargetCompletion,
+	type TargetFinalizationSummary,
+	TargetResolutionError,
+	targetPlanFromV2State,
+} from "./tracker-adapter";
+import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState, type ResolvedTargetPlan } from "./types";
 
 const REQUIRED_SKILLS = ["tdd", "diagnose", "grill-with-docs"];
 
@@ -38,13 +44,11 @@ export type ImplementationStartInput = {
 };
 
 export type PreparedImplementationSessionStart = ImplementationStartInput & {
-	target: TargetDescriptor;
+	plan: ResolvedTargetPlan;
 	rawDirtyStatus: string;
 	initialDirtyStatus?: string;
 	ignoredDirtyStatus?: string;
 	warnings: string[];
-	parentIssue?: number;
-	children: ChildIssue[];
 };
 
 export type ImplementationConfirmation = {
@@ -76,22 +80,34 @@ export type ImplementationSessionAdapters = {
 	dirtyStatus(): Promise<string>;
 	dirtyStatusExcludingRalph(): Promise<string>;
 	hasCommand(command: string): Promise<boolean>;
-	viewIssue(issue: number): Promise<Awaited<ReturnType<typeof viewIssue>>>;
-	discoverChildren(parent: number): Promise<ChildIssue[]>;
-	finalizeIssue(issue: number, body?: string): Promise<FinalizeIssueResult>;
+	resolveTargetPlan(input: { cwd: string; target: string }): Promise<ResolvedTargetPlan>;
+	finalizeTargetPlan(plan: ResolvedTargetPlan, completion: TargetCompletion): Promise<TargetFinalizationSummary>;
 };
 
 export function createImplementationSessionAdapters(pi: ExtensionAPI, cwd: string): ImplementationSessionAdapters {
+	const now = () => new Date().toISOString();
+	const targetExists = (file: string) => existsSync(file);
+	const commandAvailable = (command: string) => hasCommand(pi, command, cwd);
 	return {
-		now: () => new Date().toISOString(),
-		targetExists: (file) => existsSync(file),
+		now,
+		targetExists,
 		isGitRepo: () => isGitRepo(pi, cwd),
 		dirtyStatus: () => dirtyStatus(pi, cwd),
 		dirtyStatusExcludingRalph: () => dirtyStatusExcludingRalph(pi, cwd),
-		hasCommand: (command) => hasCommand(pi, command, cwd),
-		viewIssue: (issue) => viewIssue(pi, cwd, issue),
-		discoverChildren: (parent) => discoverChildren(pi, cwd, parent),
-		finalizeIssue: (issue, body) => finalizeIssue(pi, cwd, issue, body),
+		hasCommand: commandAvailable,
+		resolveTargetPlan: (input) =>
+			resolveTargetPlan(input, {
+				targetExists,
+				readTarget: (file) => readFile(file, "utf8"),
+				viewIssue: (issue) => viewIssue(pi, cwd, issue),
+				discoverChildren: (parent) => discoverChildren(pi, cwd, parent),
+			}),
+		finalizeTargetPlan: (plan, completion) =>
+			finalizeTargetPlan(plan, completion, {
+				hasCommand: commandAvailable,
+				finalizeIssue: (issue, body) => finalizeIssue(pi, cwd, issue, body),
+				now,
+			}),
 	};
 }
 
@@ -120,28 +136,27 @@ export async function prepareImplementationSessionStart(
 		};
 	}
 
-	const target = describeTarget(input.cwd, input.targetArg);
-	if (target.kind === "path" && !adapters.targetExists(path.resolve(input.cwd, target.path))) {
-		return {
-			ok: false,
-			effects: [{ type: "notify", message: `Target file not found: ${target.path}`, level: "error" }],
-		};
+	let plan: ResolvedTargetPlan;
+	try {
+		plan = await adapters.resolveTargetPlan({ cwd: input.cwd, target: input.targetArg });
+	} catch (error) {
+		if (error instanceof TargetResolutionError) {
+			return { ok: false, effects: [{ type: "notify", message: error.message, level: "error" }] };
+		}
+		throw error;
 	}
 
 	const rawDirtyStatus = await adapters.dirtyStatus();
 	const initialDirtyStatus = input.ignoreRalphDirty ? await adapters.dirtyStatusExcludingRalph() : rawDirtyStatus;
 	const ignoredDirtyStatus = input.ignoreRalphDirty ? ralphOnlyDirtyStatus(rawDirtyStatus) : undefined;
-	const warnings = await preflightWarnings(input.cwd, target, adapters);
-	const { parentIssue, children } = await resolveTargets(target, adapters);
+	const warnings = await preflightWarnings(input.cwd, plan, adapters);
 	const prepared: PreparedImplementationSessionStart = {
 		...input,
-		target,
+		plan,
 		rawDirtyStatus,
 		initialDirtyStatus,
 		ignoredDirtyStatus,
 		warnings,
-		parentIssue,
-		children,
 	};
 	const confirmation = initialDirtyStatus
 		? {
@@ -166,8 +181,13 @@ export async function startImplementationSession(
 		status: "active",
 		mode: "implement",
 		rootIssue: prepared.targetArg,
-		parentIssue: prepared.parentIssue,
-		childIssues: prepared.children,
+		parentIssue: parentIssueFor(prepared.plan),
+		childIssues: prepared.plan.targets.map((target) => ({
+			number: target.issueNumber ?? 0,
+			title: target.title,
+			...(target.state ? { state: target.state } : {}),
+			source: target.issueSource ?? "standalone",
+		})),
 		currentIndex: 0,
 		iteration: 1,
 		startedAt: new Date().toISOString(),
@@ -306,11 +326,14 @@ export async function advanceImplementationSession(input: {
 
 export async function completeImplementationSession(input: {
 	cwd: string;
-	adapters: Pick<ImplementationSessionAdapters, "hasCommand" | "finalizeIssue" | "now">;
+	adapters: Pick<ImplementationSessionAdapters, "finalizeTargetPlan" | "now">;
 }): Promise<ImplementationSessionResult> {
 	const state = await getActiveState(input.cwd);
 	if (!state) return { effects: [] };
-	const finalization = await finalizeGithubIssues(input.cwd, state, input.adapters);
+	const finalization = await input.adapters.finalizeTargetPlan(targetPlanFromV2State(state), {
+		body: "Final verification",
+	});
+	await appendRalphNote(input.cwd, state.name, finalization.note);
 	state.status = "completed";
 	state.completedAt = input.adapters.now();
 	await writeState(input.cwd, state);
@@ -324,7 +347,7 @@ export async function completeImplementationSession(input: {
 		},
 		{
 			type: "notify",
-			message: formatCompletionNotice(state.name, finalization),
+			message: formatTargetFinalizationNotice(state.name, finalization),
 			level: finalization.failed.length > 0 ? "warning" : "info",
 		},
 	];
@@ -336,47 +359,13 @@ export function buildImplementationSessionSystemInjection(state: MattRalphState)
 	return buildSystemInjection(state);
 }
 
-function describeTarget(cwd: string, raw: string): TargetDescriptor {
-	const issueNumber = parseIssueNumber(raw);
-	if (issueNumber) return { kind: "github", raw, number: issueNumber };
-	const resolved = path.resolve(cwd, raw);
-	if (existsSync(resolved) || raw.includes("/") || raw.endsWith(".md")) return { kind: "path", raw, path: raw };
-	return { kind: "text", raw };
-}
-
-async function resolveTargets(
-	target: TargetDescriptor,
-	adapters: Pick<ImplementationSessionAdapters, "viewIssue" | "discoverChildren">,
-): Promise<{ parentIssue?: number; children: ChildIssue[] }> {
-	if (target.kind !== "github") {
-		return { children: [{ number: 0, title: target.raw, source: "standalone" }] };
-	}
-
-	const issue = await adapters.viewIssue(target.number);
-	const title = issue?.title ?? `Issue #${target.number}`;
-	const parentIssue = issue?.parent?.number ?? extractParentFromBody(issue?.body);
-	if (parentIssue) {
-		return {
-			parentIssue,
-			children: [{ number: target.number, title, state: issue?.state, source: "standalone" }],
-		};
-	}
-
-	const children = await adapters.discoverChildren(target.number);
-	if (children.length > 0) return { parentIssue: target.number, children };
-	return {
-		parentIssue: target.number,
-		children: [{ number: target.number, title, state: issue?.state, source: "standalone" }],
-	};
-}
-
 async function preflightWarnings(
 	cwd: string,
-	target: TargetDescriptor,
+	plan: ResolvedTargetPlan,
 	adapters: Pick<ImplementationSessionAdapters, "hasCommand" | "targetExists">,
 ): Promise<string[]> {
 	const warnings: string[] = [];
-	if (target.kind === "github" && !(await adapters.hasCommand("gh"))) {
+	if (plan.root.source === "github" && !(await adapters.hasCommand("gh"))) {
 		warnings.push(
 			"GitHub issue target detected, but gh is not available. Install/auth gh before agent issue fetches.",
 		);
@@ -405,76 +394,9 @@ function eventPayload(state: MattRalphState): Record<string, unknown> {
 	};
 }
 
-type FinalizationSummary = {
-	succeeded: FinalizeIssueResult[];
-	failed: FinalizeIssueResult[];
-	skipped: string[];
-};
-
-async function finalizeGithubIssues(
-	cwd: string,
-	state: MattRalphState,
-	adapters: Pick<ImplementationSessionAdapters, "hasCommand" | "finalizeIssue">,
-): Promise<FinalizationSummary> {
-	const issueNumbers = githubIssueNumbersFor(state);
-	if (issueNumbers.length === 0) {
-		const skipped = ["No GitHub issue targets in this session."];
-		await appendRalphNote(cwd, state.name, finalizationNote([], [], skipped));
-		return { succeeded: [], failed: [], skipped };
-	}
-	if (!(await adapters.hasCommand("gh"))) {
-		const skipped = ["gh is not available; skipped final GitHub issue comment/close."];
-		await appendRalphNote(cwd, state.name, finalizationNote([], [], skipped));
-		return { succeeded: [], failed: [], skipped };
-	}
-
-	const results: FinalizeIssueResult[] = [];
-	for (const issue of issueNumbers) results.push(await adapters.finalizeIssue(issue));
-	const succeeded = results.filter((result) => result.commented && result.closed);
-	const failed = results.filter((result) => !result.commented || !result.closed);
-	await appendRalphNote(cwd, state.name, finalizationNote(succeeded, failed, []));
-	return { succeeded, failed, skipped: [] };
-}
-
-function githubIssueNumbersFor(state: MattRalphState): number[] {
-	const issues = state.childIssues.map((issue) => issue.number).filter((issue) => issue > 0);
-	const rootIssue = parseIssueNumber(state.rootIssue);
-	if (state.parentIssue && rootIssue === state.parentIssue) issues.push(state.parentIssue);
-	return [...new Set(issues)];
-}
-
-function finalizationNote(succeeded: FinalizeIssueResult[], failed: FinalizeIssueResult[], skipped: string[]): string {
-	const lines = ["", "", "## GitHub finalization", "", `Completed at ${new Date().toISOString()}.`, ""];
-	if (succeeded.length > 0) {
-		lines.push("### Commented and closed", "", ...succeeded.map((result) => `- #${result.issue}`), "");
-	}
-	if (failed.length > 0) {
-		lines.push(
-			"### Failed",
-			"",
-			...failed.map(
-				(result) =>
-					`- #${result.issue}: commented=${result.commented}, closed=${result.closed}${result.error ? `, error=${result.error}` : ""}`,
-			),
-			"",
-		);
-	}
-	if (skipped.length > 0) lines.push("### Skipped", "", ...skipped.map((reason) => `- ${reason}`), "");
-	return lines.join("\n");
-}
-
-function formatCompletionNotice(name: string, finalization: FinalizationSummary): string {
-	const pieces = [`Matt Ralph completed: ${name}`];
-	if (finalization.succeeded.length > 0) {
-		pieces.push(`commented/closed ${finalization.succeeded.map((result) => `#${result.issue}`).join(", ")}`);
-	}
-	if (finalization.failed.length > 0) {
-		pieces.push(
-			`GitHub finalization failed for ${finalization.failed.map((result) => `#${result.issue}`).join(", ")}`,
-		);
-	}
-	if (finalization.skipped.length > 0) pieces.push(finalization.skipped.join(" "));
-	return pieces.join("; ");
+function parentIssueFor(plan: ResolvedTargetPlan): number | undefined {
+	if (plan.root.source !== "github") return undefined;
+	return plan.root.parentIssueNumber ?? plan.root.issueNumber;
 }
 
 function ralphOnlyDirtyStatus(status: string): string | undefined {

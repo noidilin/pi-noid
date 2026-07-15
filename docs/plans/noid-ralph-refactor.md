@@ -1,8 +1,13 @@
 # noid-ralph scoped refactor plan
 
-Status: proposed
+Status: in progress
 Scope: `packages/noid-ralph/`
 Reference implementation: `ref/ralph-tui/`
+
+Progress:
+
+- Slice 0 complete: current target lifecycle, prompt phases, events, widget output, and schema-v2 parsing are characterized.
+- Slice 1 complete: target resolution and source-specific finalization live behind the normalized `tracker-adapter.ts` facade; implementation state remains schema v2 through an explicit compatibility mapping.
 
 ## 1. Goal
 
