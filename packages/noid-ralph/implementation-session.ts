@@ -13,12 +13,11 @@ import {
 } from "./github";
 import { getActiveState, listStates, readState, sanitizeSessionName, setActiveSession, writeState } from "./loop-store";
 import {
-	buildFinalPrompt,
-	buildKickoffPrompt,
-	buildNextPrompt,
-	buildResumePrompt,
-	buildSystemInjection,
-} from "./prompt";
+	finalPromptContext,
+	iterationPromptContext,
+	renderRalphPrompt,
+	systemInjectionContext,
+} from "./prompt-template";
 import { appendRalphNote, ensureRalphStateStorage, notePathFor } from "./ralph-state-storage";
 import {
 	finalizeTargetPlan,
@@ -27,7 +26,6 @@ import {
 	type TargetCompletion,
 	type TargetFinalizationSummary,
 	TargetResolutionError,
-	targetPlanFromV2State,
 } from "./tracker-adapter";
 import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState, type ResolvedTargetPlan } from "./types";
 
@@ -188,6 +186,7 @@ export async function startImplementationSession(
 			...(target.state ? { state: target.state } : {}),
 			source: target.issueSource ?? "standalone",
 		})),
+		targetPlan: prepared.plan,
 		currentIndex: 0,
 		iteration: 1,
 		startedAt: new Date().toISOString(),
@@ -215,7 +214,10 @@ export async function startImplementationSession(
 				(warning): ImplementationSessionEffect => ({ type: "notify", message: warning, level: "warning" }),
 			),
 			{ type: "notify", message: `Matt Ralph session created: ${taskFileRel}`, level: "info" },
-			{ type: "prompt", prompt: buildKickoffPrompt(state) },
+			{
+				type: "prompt",
+				prompt: renderRalphPrompt("implementation.kickoff", iterationPromptContext(state, "start")),
+			},
 		],
 	};
 }
@@ -245,7 +247,10 @@ export async function resumeImplementationSession(
 		state,
 		effects: [
 			{ type: "updateUi", state },
-			{ type: "prompt", prompt: buildResumePrompt(state) },
+			{
+				type: "prompt",
+				prompt: renderRalphPrompt("implementation.resume", iterationPromptContext(state, "resume")),
+			},
 		],
 	};
 }
@@ -309,14 +314,22 @@ export async function advanceImplementationSession(input: {
 		{ type: "updateUi", state },
 	];
 	if (state.currentIndex >= state.childIssues.length) {
-		effects.push({ type: "prompt", prompt: buildFinalPrompt(state), deliverAs: "followUp" });
+		effects.push({
+			type: "prompt",
+			prompt: renderRalphPrompt("implementation.finalVerification", finalPromptContext(state)),
+			deliverAs: "followUp",
+		});
 		return {
 			state,
 			message: "All Matt Ralph targets processed. Queued final verification prompt.",
 			effects,
 		};
 	}
-	effects.push({ type: "prompt", prompt: buildNextPrompt(state), deliverAs: "followUp" });
+	effects.push({
+		type: "prompt",
+		prompt: renderRalphPrompt("implementation.next", iterationPromptContext(state, "next")),
+		deliverAs: "followUp",
+	});
 	return {
 		state,
 		message: `Advanced Matt Ralph to target ${state.currentIndex + 1}/${state.childIssues.length}.`,
@@ -330,7 +343,7 @@ export async function completeImplementationSession(input: {
 }): Promise<ImplementationSessionResult> {
 	const state = await getActiveState(input.cwd);
 	if (!state) return { effects: [] };
-	const finalization = await input.adapters.finalizeTargetPlan(targetPlanFromV2State(state), {
+	const finalization = await input.adapters.finalizeTargetPlan(state.targetPlan, {
 		body: "Final verification",
 	});
 	await appendRalphNote(input.cwd, state.name, finalization.note);
@@ -356,7 +369,7 @@ export async function completeImplementationSession(input: {
 }
 
 export function buildImplementationSessionSystemInjection(state: MattRalphState): string {
-	return buildSystemInjection(state);
+	return renderRalphPrompt("implementation.systemInjection", systemInjectionContext(state));
 }
 
 async function preflightWarnings(

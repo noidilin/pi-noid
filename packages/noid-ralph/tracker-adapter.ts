@@ -1,10 +1,11 @@
 import path from "node:path";
+import { extractAcceptanceCriteria } from "./acceptance";
 import type { FinalizeIssueResult } from "./github";
 import { extractParentFromBody, parseIssueNumber } from "./github";
 import type {
 	ChildIssue,
 	IssueMetadata,
-	MattRalphState,
+	MattRalphStateV2,
 	ResolvedImplementationTarget,
 	ResolvedTargetPlan,
 	TargetSourceKind,
@@ -63,7 +64,7 @@ export async function resolveTargetPlan(
 			source: "prd",
 			title: input.target,
 			body,
-			acceptanceCriteria: [],
+			acceptanceCriteria: extractAcceptanceCriteria({ body }),
 		};
 		return { root: target, targets: [target] };
 	}
@@ -102,7 +103,7 @@ export async function finalizeTargetPlan(
 	};
 }
 
-export function targetPlanFromV2State(state: MattRalphState): ResolvedTargetPlan {
+export function targetPlanFromV2State(state: MattRalphStateV2): ResolvedTargetPlan {
 	const rootIssueNumber = parseIssueNumber(state.rootIssue);
 	const source: TargetSourceKind = rootIssueNumber
 		? "github"
@@ -121,12 +122,14 @@ export function targetPlanFromV2State(state: MattRalphState): ResolvedTargetPlan
 					? { parentIssueNumber: state.parentIssue }
 					: {}),
 				acceptanceCriteria: [],
+				acceptanceCriteriaResolved: false,
 			}
 		: {
 				key: `${source}:${source === "text" ? keyFragment(state.rootIssue) : state.rootIssue}`,
 				source,
 				title: state.rootIssue,
 				acceptanceCriteria: [],
+				acceptanceCriteriaResolved: false,
 			};
 	const targets = state.childIssues.map((child): ResolvedImplementationTarget => {
 		if (child.number <= 0) return { ...root, title: child.title };
@@ -139,6 +142,7 @@ export function targetPlanFromV2State(state: MattRalphState): ResolvedTargetPlan
 			...(child.state ? { state: child.state } : {}),
 			issueSource: child.source,
 			acceptanceCriteria: [],
+			acceptanceCriteriaResolved: false,
 		};
 	});
 	return { root, targets };
@@ -208,7 +212,7 @@ function githubTarget(input: {
 		...(input.parentIssueNumber === undefined ? {} : { parentIssueNumber: input.parentIssueNumber }),
 		...(input.state === undefined ? {} : { state: input.state }),
 		...(input.issueSource === undefined ? {} : { issueSource: input.issueSource }),
-		acceptanceCriteria: [],
+		acceptanceCriteria: extractAcceptanceCriteria({ body: input.body }),
 	};
 }
 

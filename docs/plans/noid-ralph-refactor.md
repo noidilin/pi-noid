@@ -8,6 +8,9 @@ Progress:
 
 - Slice 0 complete: current target lifecycle, prompt phases, events, widget output, and schema-v2 parsing are characterized.
 - Slice 1 complete: target resolution and source-specific finalization live behind the normalized `tracker-adapter.ts` facade; implementation state remains schema v2 through an explicit compatibility mapping.
+- Slice 2 complete: deterministic acceptance-criteria extraction is wired into target resolution; implementation state schema v3 durably stores the normalized target plan, with explicit v2 migration marking criteria unresolved; all five implementation prompt phases render through typed named templates.
+
+Next agent: begin Slice 3 with the `ralph-state-storage.ts` atomic JSON and safe iteration-path seam. Add one failing temporary-filesystem test at a time before introducing `iteration-log.ts`; preserve the schema-v3 target plan and unresolved-migration behavior shipped in Slice 2.
 
 ## 1. Goal
 
@@ -556,12 +559,13 @@ All slices use TDD: add a failing behavior test, implement through the module in
 - Keep existing prompts and advancement behavior through a temporary mapping if needed.
 - Delete replaced private helpers and tests that inspect past the new seam.
 
-### Slice 2: Extract criteria and render named templates
+### Slice 2: Extract criteria and render named templates (complete)
 
-- Add pure acceptance-criteria extraction tests and implementation.
-- Add `prompt-template.ts` with typed contexts and named built-ins.
-- Render criteria in kickoff/resume/next/system/final prompts as applicable.
-- Preserve behavior for criteria-free and migrated targets.
+- Added pure acceptance-criteria extraction tests and implementation.
+- Added `prompt-template.ts` with typed contexts and named built-ins.
+- Rendered criteria in kickoff/resume/next/system/final prompts as applicable.
+- Bumped implementation state to schema v3 so normalized targets and criteria survive restart; v2 migration marks acceptance criteria unresolved until a later source refresh.
+- Preserved advancement behavior for criteria-free and migrated targets; enforcement remains deferred to Slice 4.
 
 ### Slice 3: Persist iteration records
 

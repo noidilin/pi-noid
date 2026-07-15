@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import mattRalphExtension, { hasGitCommit, protectRalphGitCommitCommand } from "./index";
 import { setActiveSession, writeState } from "./loop-store";
-import type { MattRalphState } from "./types";
+import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
 async function tempRepo(): Promise<string> {
 	return mkdtemp(path.join(os.tmpdir(), "ralph-index-"));
@@ -12,7 +12,7 @@ async function tempRepo(): Promise<string> {
 
 function createState(overrides: Partial<MattRalphState> = {}): MattRalphState {
 	return {
-		schemaVersion: 2,
+		schemaVersion: MATT_RALPH_SCHEMA_VERSION,
 		name: "implement-issue-34",
 		taskFile: ".ralph/implement-issue-34.md",
 		status: "active",
@@ -23,6 +23,13 @@ function createState(overrides: Partial<MattRalphState> = {}): MattRalphState {
 			{ number: 35, title: "First child", source: "native", state: "open" },
 			{ number: 36, title: "Second child", source: "parent-section", state: "open" },
 		],
+		targetPlan: {
+			root: { key: "github:34", source: "github", title: "Issue #34", issueNumber: 34, acceptanceCriteria: [] },
+			targets: [
+				{ key: "github:35", source: "github", title: "First child", issueNumber: 35, acceptanceCriteria: [] },
+				{ key: "github:36", source: "github", title: "Second child", issueNumber: 36, acceptanceCriteria: [] },
+			],
+		},
 		currentIndex: 0,
 		iteration: 2,
 		maxIterations: 4,

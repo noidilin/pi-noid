@@ -49,6 +49,12 @@ function createAdapters(options: AdapterOptions = {}): ChildRunAdapters & {
 		mode: "implement",
 		rootIssue: "#34",
 		childIssues: [{ number: 34, title: "Do the thing", source: "standalone" }],
+		targetPlan: {
+			root: { key: "github:34", source: "github", title: "Do the thing", issueNumber: 34, acceptanceCriteria: [] },
+			targets: [
+				{ key: "github:34", source: "github", title: "Do the thing", issueNumber: 34, acceptanceCriteria: [] },
+			],
+		},
 		currentIndex: 0,
 		iteration: 1,
 		startedAt: "2026-01-01T00:00:03.000Z",

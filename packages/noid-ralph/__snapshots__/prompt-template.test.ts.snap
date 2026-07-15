@@ -3,10 +3,13 @@
 exports[`Ralph prompts > characterizes criteria-free text targets and uncapped iterations 1`] = `
 "Matt Ralph implementation loop: start session implement-issue-34.
 
-Current implementation target (1/1): write characterization tests [unknown, standalone]
+Current implementation target (1/1): write characterization tests [unknown, text]
 Iteration: 1
 Root input: write characterization tests
 Session notes file: .ralph/implement-issue-34.md
+
+Acceptance contract:
+- No source acceptance criteria were found. Workflow validation, a local commit, and updated notes are still required.
 
 Workflow instructions:
 1. Use Matt Pocock skills already installed/discoverable where relevant. Prefer tdd for implementation, diagnose for bugs, and grill-with-docs only if product/domain ambiguity blocks progress.
@@ -32,6 +35,11 @@ exports[`Ralph prompts > characterizes every implementation prompt phase > final
 
 All planned implementation targets have been processed.
 
+Acceptance contracts reviewed:
+- #35 First child [open, github]: 1 source criterion
+  - [ ] First behavior works (first-behavior-works)
+- #36 Second child [closed, github]: no source criteria; invariant workflow requirements apply
+
 Do this now:
 - Review .ralph/implement-issue-34.md and the git history from this session.
 - Run the appropriate project checks/tests if they have not just passed.
@@ -45,10 +53,13 @@ Do this now:
 exports[`Ralph prompts > characterizes every implementation prompt phase > kickoff 1`] = `
 "Matt Ralph implementation loop: start session implement-issue-34.
 
-Current implementation target (1/2): #35 First child [open, native]
+Current implementation target (1/2): #35 First child [open, github]
 Iteration: 1/4
 Root input: #34
 Session notes file: .ralph/implement-issue-34.md
+
+Acceptance contract:
+- [ ] First behavior works (first-behavior-works)
 
 Workflow instructions:
 1. Use Matt Pocock skills already installed/discoverable where relevant. Prefer tdd for implementation, diagnose for bugs, and grill-with-docs only if product/domain ambiguity blocks progress.
@@ -72,10 +83,13 @@ M src/existing.ts"
 exports[`Ralph prompts > characterizes every implementation prompt phase > next 1`] = `
 "Matt Ralph implementation loop: continue session implement-issue-34.
 
-Current implementation target (2/2): #36 Second child [closed, parent-section]
+Current implementation target (2/2): #36 Second child [closed, github]
 Iteration: 2/4
 Root input: #34
 Session notes file: .ralph/implement-issue-34.md
+
+Acceptance contract:
+- No source acceptance criteria were found. Workflow validation, a local commit, and updated notes are still required.
 
 Workflow instructions:
 1. Use Matt Pocock skills already installed/discoverable where relevant. Prefer tdd for implementation, diagnose for bugs, and grill-with-docs only if product/domain ambiguity blocks progress.
@@ -99,10 +113,13 @@ M src/existing.ts"
 exports[`Ralph prompts > characterizes every implementation prompt phase > resume 1`] = `
 "Matt Ralph implementation loop: resume session implement-issue-34.
 
-Current implementation target (1/2): #35 First child [open, native]
+Current implementation target (1/2): #35 First child [open, github]
 Iteration: 1/4
 Root input: #34
 Session notes file: .ralph/implement-issue-34.md
+
+Acceptance contract:
+- [ ] First behavior works (first-behavior-works)
 
 Workflow instructions:
 1. Use Matt Pocock skills already installed/discoverable where relevant. Prefer tdd for implementation, diagnose for bugs, and grill-with-docs only if product/domain ambiguity blocks progress.
@@ -131,7 +148,9 @@ Matt Ralph active session: implement-issue-34
 - Session notes: .ralph/implement-issue-34.md
 - Status: active
 - Iteration: 1/4
-- Current target: #35 First child [open, native]
+- Current target: #35 First child [open, github]
+Acceptance contract:
+- [ ] First behavior works (first-behavior-works)
 - Scope: implement only the current target unless explicitly asked otherwise.
 - When this target is implemented, tested, committed locally, and .ralph/implement-issue-34.md is updated, call matt_ralph_done unless all targets are done; final completion marker is MATT_RALPH_COMPLETE.
 - Do not close/comment on tracker issues yourself during final completion; the Ralph extension handles GitHub finalization after MATT_RALPH_COMPLETE. Never push."

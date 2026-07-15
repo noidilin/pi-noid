@@ -19,6 +19,27 @@ function createState(overrides: Partial<MattRalphState> = {}): MattRalphState {
 		mode: "implement",
 		rootIssue: "#34",
 		childIssues: [{ number: 34, title: "Do thing", source: "standalone" }],
+		targetPlan: {
+			root: {
+				key: "github:34",
+				source: "github",
+				title: "Do thing",
+				issueNumber: 34,
+				acceptanceCriteria: [],
+				acceptanceCriteriaResolved: true,
+			},
+			targets: [
+				{
+					key: "github:34",
+					source: "github",
+					title: "Do thing",
+					issueNumber: 34,
+					issueSource: "standalone",
+					acceptanceCriteria: [],
+					acceptanceCriteriaResolved: true,
+				},
+			],
+		},
 		currentIndex: 0,
 		iteration: 1,
 		startedAt: "2026-01-01T00:00:00.000Z",
@@ -27,7 +48,7 @@ function createState(overrides: Partial<MattRalphState> = {}): MattRalphState {
 }
 
 describe("loop store", () => {
-	it("parses a persisted schema-v2 implementation session", async () => {
+	it("migrates a persisted schema-v2 implementation session with unresolved acceptance", async () => {
 		const cwd = await tempRepo();
 		const fixture = {
 			schemaVersion: 2,
@@ -47,7 +68,33 @@ describe("loop store", () => {
 		await mkdir(path.dirname(fixturePath), { recursive: true });
 		await writeFile(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
 
-		await expect(readState(cwd, fixture.name)).resolves.toEqual(fixture);
+		await expect(readState(cwd, fixture.name)).resolves.toEqual({
+			...fixture,
+			schemaVersion: 3,
+			targetPlan: {
+				root: {
+					key: "github:34",
+					source: "github",
+					title: "Issue #34",
+					issueNumber: 34,
+					acceptanceCriteria: [],
+					acceptanceCriteriaResolved: false,
+				},
+				targets: [
+					{
+						key: "github:35",
+						source: "github",
+						title: "Do thing",
+						issueNumber: 35,
+						parentIssueNumber: 34,
+						state: "open",
+						issueSource: "native",
+						acceptanceCriteria: [],
+						acceptanceCriteriaResolved: false,
+					},
+				],
+			},
+		});
 	});
 
 	it("lists supported Implementation sessions and unsupported Implementation records", async () => {

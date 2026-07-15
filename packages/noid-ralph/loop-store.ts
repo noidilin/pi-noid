@@ -12,7 +12,8 @@ import {
 	type UnsupportedStateRecord,
 	writeRalphState,
 } from "./ralph-state-storage";
-import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
+import { targetPlanFromV2State } from "./tracker-adapter";
+import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState, type MattRalphStateV2 } from "./types";
 
 const ACTIVE_FILE = "active-session";
 const IMPLEMENT_PREFIX = "implement-";
@@ -121,17 +122,28 @@ export async function archiveState(cwd: string, state: MattRalphState): Promise<
 }
 
 function parseMattRalphState(value: unknown, file: string): MattRalphState {
-	if (!isMattRalphState(value)) throw new Error(`Unsupported Matt Ralph state schema in ${file}.`);
-	return value;
+	if (isMattRalphState(value)) return value;
+	if (isMattRalphStateV2(value)) {
+		return {
+			...value,
+			schemaVersion: MATT_RALPH_SCHEMA_VERSION,
+			targetPlan: targetPlanFromV2State(value),
+		};
+	}
+	throw new Error(`Unsupported Matt Ralph state schema in ${file}.`);
+}
+
+function hasImplementationStateShape(value: unknown): value is Record<string, unknown> {
+	if (!value || typeof value !== "object") return false;
+	const state = value as Record<string, unknown>;
+	return state.mode === "implement" && typeof state.name === "string" && Array.isArray(state.childIssues);
 }
 
 function isMattRalphState(value: unknown): value is MattRalphState {
-	if (!value || typeof value !== "object") return false;
-	const state = value as Partial<MattRalphState>;
-	return (
-		state.schemaVersion === MATT_RALPH_SCHEMA_VERSION &&
-		state.mode === "implement" &&
-		typeof state.name === "string" &&
-		Array.isArray(state.childIssues)
-	);
+	if (!hasImplementationStateShape(value)) return false;
+	return value.schemaVersion === MATT_RALPH_SCHEMA_VERSION && typeof value.targetPlan === "object";
+}
+
+function isMattRalphStateV2(value: unknown): value is MattRalphStateV2 {
+	return hasImplementationStateShape(value) && value.schemaVersion === 2;
 }

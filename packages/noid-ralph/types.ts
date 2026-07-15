@@ -1,4 +1,4 @@
-export const MATT_RALPH_SCHEMA_VERSION = 2;
+export const MATT_RALPH_SCHEMA_VERSION = 3;
 
 export type IssueSource = "native" | "parent-section" | "standalone";
 export type TargetSourceKind = "github" | "prd" | "text";
@@ -19,6 +19,7 @@ export type ResolvedImplementationTarget = {
 	state?: "open" | "closed";
 	issueSource?: IssueSource;
 	acceptanceCriteria: AcceptanceCriterion[];
+	acceptanceCriteriaResolved?: boolean;
 };
 
 export type ResolvedTargetPlan = {
@@ -50,6 +51,7 @@ export type MattRalphState = {
 	rootIssue: string;
 	parentIssue?: number;
 	childIssues: ChildIssue[];
+	targetPlan: ResolvedTargetPlan;
 	currentIndex: number;
 	iteration: number;
 	startedAt: string;
@@ -65,6 +67,10 @@ export type MattRalphState = {
 	initialDirtyStatus?: string;
 	ignoredDirtyStatus?: string;
 	warnings?: string[];
+};
+
+export type MattRalphStateV2 = Omit<MattRalphState, "schemaVersion" | "targetPlan"> & {
+	schemaVersion: 2;
 };
 
 export type IssueMetadata = {

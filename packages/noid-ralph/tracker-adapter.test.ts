@@ -6,7 +6,7 @@ import {
 	type TrackerAdapterDependencies,
 	targetPlanFromV2State,
 } from "./tracker-adapter";
-import type { MattRalphState } from "./types";
+import type { MattRalphStateV2 } from "./types";
 
 function createDependencies(overrides: Partial<TrackerAdapterDependencies> = {}): TrackerAdapterDependencies {
 	return {
@@ -133,6 +133,33 @@ describe("target tracker adapter", () => {
 		});
 	});
 
+	it("extracts acceptance criteria while resolving source content", async () => {
+		const github = await resolveTargetPlan(
+			{ cwd: "/repo", target: "#37" },
+			createDependencies({
+				viewIssue: async () => ({
+					number: 37,
+					title: "Standalone",
+					body: "## Acceptance Criteria\n\n- [ ] GitHub behavior works",
+				}),
+			}),
+		);
+		const prd = await resolveTargetPlan(
+			{ cwd: "/repo", target: "docs/plan.md" },
+			createDependencies({
+				targetExists: () => true,
+				readTarget: async () => "## Acceptance Criteria\n\n- Local behavior works",
+			}),
+		);
+
+		expect(github.targets[0]?.acceptanceCriteria).toEqual([
+			{ id: "github-behavior-works", text: "GitHub behavior works", source: "checklist" },
+		]);
+		expect(prd.targets[0]?.acceptanceCriteria).toEqual([
+			{ id: "local-behavior-works", text: "Local behavior works", source: "section" },
+		]);
+	});
+
 	it("normalizes local Markdown and free-text targets", async () => {
 		const dependencies = createDependencies({
 			targetExists: (file) => file === "/repo/docs/plan.md",
@@ -255,7 +282,7 @@ describe("target tracker adapter", () => {
 			currentIndex: 0,
 			iteration: 1,
 			startedAt: "2026-01-01T00:00:00.000Z",
-		} satisfies MattRalphState;
+		} satisfies MattRalphStateV2;
 
 		expect(targetPlanFromV2State(state)).toEqual({
 			root: {
@@ -264,6 +291,7 @@ describe("target tracker adapter", () => {
 				title: "Issue #34",
 				issueNumber: 34,
 				acceptanceCriteria: [],
+				acceptanceCriteriaResolved: false,
 			},
 			targets: [
 				{
@@ -275,6 +303,7 @@ describe("target tracker adapter", () => {
 					state: "open",
 					issueSource: "native",
 					acceptanceCriteria: [],
+					acceptanceCriteriaResolved: false,
 				},
 			],
 		});

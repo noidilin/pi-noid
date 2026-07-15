@@ -54,6 +54,20 @@ function createState(overrides: Partial<MattRalphState> = {}): MattRalphState {
 		rootIssue: "#34",
 		parentIssue: 34,
 		childIssues: [{ number: 34, title: "Do thing", source: "standalone", state: "open" }],
+		targetPlan: {
+			root: { key: "github:34", source: "github", title: "Do thing", issueNumber: 34, acceptanceCriteria: [] },
+			targets: [
+				{
+					key: "github:34",
+					source: "github",
+					title: "Do thing",
+					issueNumber: 34,
+					state: "open",
+					issueSource: "standalone",
+					acceptanceCriteria: [],
+				},
+			],
+		},
 		currentIndex: 0,
 		iteration: 1,
 		startedAt: "2026-01-01T00:00:00.000Z",
@@ -68,7 +82,7 @@ async function writeActiveState(cwd: string, state = createState()): Promise<Mat
 }
 
 describe("implementation session", () => {
-	it("persists a normalized target plan through the schema-v2 compatibility mapping", async () => {
+	it("persists the normalized target plan in schema v3 state", async () => {
 		const cwd = await tempRepo();
 		const prepared = await prepareImplementationSessionStart(
 			{ cwd, targetArg: "#34" },
@@ -90,7 +104,7 @@ describe("implementation session", () => {
 							parentIssueNumber: 34,
 							state: "open",
 							issueSource: "native",
-							acceptanceCriteria: [],
+							acceptanceCriteria: [{ id: "child-works", text: "Child works", source: "checklist" }],
 						},
 					],
 				}),
@@ -101,10 +115,21 @@ describe("implementation session", () => {
 		const result = await startImplementationSession(prepared.prepared);
 
 		expect(result.state).toMatchObject({
+			schemaVersion: 3,
 			rootIssue: "#34",
 			parentIssue: 34,
 			childIssues: [{ number: 35, title: "Child", state: "open", source: "native" }],
+			targetPlan: {
+				targets: [
+					{
+						key: "github:35",
+						acceptanceCriteria: [{ id: "child-works", text: "Child works", source: "checklist" }],
+					},
+				],
+			},
 		});
+		const prompt = result.effects.find((effect) => effect.type === "prompt");
+		expect(prompt?.prompt.match(/Child works/g)).toHaveLength(1);
 	});
 
 	it("prepares dirty worktree confirmation then starts a durable Implementation session", async () => {
