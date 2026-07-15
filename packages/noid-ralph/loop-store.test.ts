@@ -1,8 +1,8 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listStateRecords, writeState } from "./loop-store";
+import { listStateRecords, readState, writeState } from "./loop-store";
 import { statePathFor } from "./ralph-state-storage";
 import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
@@ -27,6 +27,29 @@ function createState(overrides: Partial<MattRalphState> = {}): MattRalphState {
 }
 
 describe("loop store", () => {
+	it("parses a persisted schema-v2 implementation session", async () => {
+		const cwd = await tempRepo();
+		const fixture = {
+			schemaVersion: 2,
+			name: "implement-v2-fixture",
+			taskFile: ".ralph/implement-v2-fixture.md",
+			status: "paused",
+			mode: "implement",
+			rootIssue: "#34",
+			parentIssue: 34,
+			childIssues: [{ number: 35, title: "Do thing", state: "open", source: "native" }],
+			currentIndex: 0,
+			iteration: 2,
+			startedAt: "2026-01-01T00:00:00.000Z",
+			initialDirtyStatus: " M src/existing.ts",
+		};
+		const fixturePath = statePathFor(cwd, fixture.name);
+		await mkdir(path.dirname(fixturePath), { recursive: true });
+		await writeFile(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
+
+		await expect(readState(cwd, fixture.name)).resolves.toEqual(fixture);
+	});
+
 	it("lists supported Implementation sessions and unsupported Implementation records", async () => {
 		const cwd = await tempRepo();
 		await writeState(cwd, createState());

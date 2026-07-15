@@ -61,6 +61,106 @@ async function writeActiveState(cwd: string, state = createState()): Promise<Mat
 }
 
 describe("implementation session", () => {
+	it("resolves a GitHub parent issue to its discovered children", async () => {
+		const cwd = await tempRepo();
+		const children = [
+			{ number: 35, title: "First child", source: "native" as const, state: "open" as const },
+			{ number: 36, title: "Second child", source: "parent-section" as const, state: "closed" as const },
+		];
+		const prepared = await prepareImplementationSessionStart(
+			{ cwd, targetArg: "#34" },
+			createAdapters({ discoverChildren: async (parent) => (parent === 34 ? children : []) }),
+		);
+
+		expect(prepared).toMatchObject({
+			ok: true,
+			prepared: {
+				target: { kind: "github", raw: "#34", number: 34 },
+				parentIssue: 34,
+				children,
+			},
+		});
+	});
+
+	it("resolves a GitHub child issue without rediscovering its parent's children", async () => {
+		const cwd = await tempRepo();
+		let discovered = false;
+		const prepared = await prepareImplementationSessionStart(
+			{ cwd, targetArg: "#35" },
+			createAdapters({
+				viewIssue: async () => ({
+					number: 35,
+					title: "Child issue",
+					state: "open",
+					parent: { number: 34, title: "Parent issue" },
+				}),
+				discoverChildren: async () => {
+					discovered = true;
+					return [];
+				},
+			}),
+		);
+
+		expect(discovered).toBe(false);
+		expect(prepared).toMatchObject({
+			ok: true,
+			prepared: {
+				parentIssue: 34,
+				children: [{ number: 35, title: "Child issue", state: "open", source: "standalone" }],
+			},
+		});
+	});
+
+	it("resolves a standalone GitHub issue as its own single-target plan", async () => {
+		const cwd = await tempRepo();
+		const prepared = await prepareImplementationSessionStart(
+			{ cwd, targetArg: "https://github.com/acme/repo/issues/37" },
+			createAdapters({
+				viewIssue: async () => ({ number: 37, title: "Standalone issue", state: "open" }),
+			}),
+		);
+
+		expect(prepared).toMatchObject({
+			ok: true,
+			prepared: {
+				target: { kind: "github", number: 37 },
+				parentIssue: 37,
+				children: [{ number: 37, title: "Standalone issue", state: "open", source: "standalone" }],
+			},
+		});
+	});
+
+	it("distinguishes local Markdown paths, missing paths, and free-text targets", async () => {
+		const cwd = await tempRepo();
+		const adapters = createAdapters({ targetExists: (file) => file.endsWith("docs/plan.md") });
+
+		const localPath = await prepareImplementationSessionStart({ cwd, targetArg: "docs/plan.md" }, adapters);
+		const missingPath = await prepareImplementationSessionStart({ cwd, targetArg: "docs/missing.md" }, adapters);
+		const freeText = await prepareImplementationSessionStart(
+			{ cwd, targetArg: "write characterization tests" },
+			adapters,
+		);
+
+		expect(localPath).toMatchObject({
+			ok: true,
+			prepared: {
+				target: { kind: "path", raw: "docs/plan.md", path: "docs/plan.md" },
+				children: [{ number: 0, title: "docs/plan.md", source: "standalone" }],
+			},
+		});
+		expect(missingPath).toEqual({
+			ok: false,
+			effects: [{ type: "notify", message: "Target file not found: docs/missing.md", level: "error" }],
+		});
+		expect(freeText).toMatchObject({
+			ok: true,
+			prepared: {
+				target: { kind: "text", raw: "write characterization tests" },
+				children: [{ number: 0, title: "write characterization tests", source: "standalone" }],
+			},
+		});
+	});
+
 	it("prepares dirty worktree confirmation then starts a durable Implementation session", async () => {
 		const cwd = await tempRepo();
 		const prepared = await prepareImplementationSessionStart(
@@ -77,6 +177,7 @@ describe("implementation session", () => {
 
 		const result = await startImplementationSession(prepared.prepared);
 		expect(result.effects.map((effect) => effect.type)).toEqual(["updateUi", "event", "notify", "prompt"]);
+		expect(result.effects).toContainEqual(expect.objectContaining({ type: "event", name: "matt_ralph:start" }));
 		expect(result.state).toMatchObject({
 			name: "implement-write-tests",
 			status: "active",
@@ -99,6 +200,7 @@ describe("implementation session", () => {
 
 		expect(result.message).toBe("All Matt Ralph targets processed. Queued final verification prompt.");
 		expect(result.effects).toContainEqual(expect.objectContaining({ type: "prompt", deliverAs: "followUp" }));
+		expect(result.effects).toContainEqual(expect.objectContaining({ type: "event", name: "matt_ralph:advance" }));
 		expect((await readState(cwd, "implement-issue-34")).currentIndex).toBe(1);
 	});
 
@@ -114,6 +216,11 @@ describe("implementation session", () => {
 
 		expect(result.message).toContain("paused after exceeding max iterations");
 		expect(result.effects).toContainEqual({ type: "updateUi", state: undefined });
+		expect(result.effects).toContainEqual({
+			type: "event",
+			name: "matt_ralph:pause",
+			payload: { name: "implement-issue-34" },
+		});
 		expect((await readState(cwd, "implement-issue-34")).status).toBe("paused");
 	});
 
@@ -142,7 +249,94 @@ describe("implementation session", () => {
 		});
 
 		expect((await readState(cwd, "implement-issue-34")).status).toBe("completed");
+		expect(result.effects).toContainEqual(expect.objectContaining({ type: "event", name: "matt_ralph:complete" }));
 		expect(result.effects).toContainEqual(expect.objectContaining({ type: "notify", level: "warning" }));
 		expect(await readFile(notePathFor(cwd, "implement-issue-34"), "utf8")).toContain("close failed");
+	});
+
+	it("finalizes child issues and their root parent exactly once", async () => {
+		const cwd = await tempRepo();
+		await writeActiveState(
+			cwd,
+			createState({
+				rootIssue: "#34",
+				parentIssue: 34,
+				childIssues: [
+					{ number: 35, title: "First child", source: "native", state: "open" },
+					{ number: 36, title: "Second child", source: "parent-section", state: "open" },
+				],
+			}),
+		);
+		const finalized: number[] = [];
+
+		await completeImplementationSession({
+			cwd,
+			adapters: createAdapters({
+				finalizeIssue: async (issue) => {
+					finalized.push(issue);
+					return { issue, commented: true, closed: true };
+				},
+			}),
+		});
+
+		expect(finalized).toEqual([35, 36, 34]);
+	});
+
+	it("finalizes only a targeted child when its parent is context rather than the root", async () => {
+		const cwd = await tempRepo();
+		await writeActiveState(
+			cwd,
+			createState({
+				rootIssue: "#35",
+				parentIssue: 34,
+				childIssues: [{ number: 35, title: "Child issue", source: "standalone", state: "open" }],
+			}),
+		);
+		const finalized: number[] = [];
+
+		await completeImplementationSession({
+			cwd,
+			adapters: createAdapters({
+				finalizeIssue: async (issue) => {
+					finalized.push(issue);
+					return { issue, commented: true, closed: true };
+				},
+			}),
+		});
+
+		expect(finalized).toEqual([35]);
+	});
+
+	it("skips GitHub finalization for local targets and when gh is unavailable", async () => {
+		const localCwd = await tempRepo();
+		await writeActiveState(
+			localCwd,
+			createState({
+				rootIssue: "docs/plan.md",
+				parentIssue: undefined,
+				childIssues: [{ number: 0, title: "docs/plan.md", source: "standalone" }],
+			}),
+		);
+		const githubCwd = await tempRepo();
+		await writeActiveState(githubCwd);
+		const finalized: number[] = [];
+		const adapters = createAdapters({
+			hasCommand: async () => false,
+			finalizeIssue: async (issue) => {
+				finalized.push(issue);
+				return { issue, commented: true, closed: true };
+			},
+		});
+
+		const local = await completeImplementationSession({ cwd: localCwd, adapters });
+		const github = await completeImplementationSession({ cwd: githubCwd, adapters });
+
+		expect(finalized).toEqual([]);
+		expect(local.effects).toContainEqual(
+			expect.objectContaining({ type: "notify", message: expect.stringContaining("No GitHub issue targets") }),
+		);
+		expect(github.effects).toContainEqual(
+			expect.objectContaining({ type: "notify", message: expect.stringContaining("gh is not available") }),
+		);
 	});
 });

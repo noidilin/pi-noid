@@ -1,0 +1,14 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Ralph UI projection > projects active schema-v2 state into the status line and compact widget 1`] = `
+[
+  "╭─ Matt Ralph ───────────────────────────────────╮",
+  "│ ● active  target 1/2  iter 2/4  ⚠1 dirty       │",
+  "│ Now: #35 First child                           │",
+  "│ Next: #36                                      │",
+  "│ Notes: .ralph/implement-issue-34.md            │",
+  "│ Policy: local commit · never push · GH finali[0m…[0m │",
+  "│ Hints: stop · status · archive                 │",
+  "╰────────────────────────────────────────────────╯",
+]
+`;
