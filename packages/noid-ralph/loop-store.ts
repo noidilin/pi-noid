@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
 	archiveRalphStateFiles,
+	deleteRalphIterations,
 	deleteRalphNote,
 	deleteRalphState,
 	ensureRalphStateStorage,
@@ -106,6 +107,7 @@ export async function deleteState(cwd: string, name: string): Promise<void> {
 
 export async function deleteTask(cwd: string, state: MattRalphState): Promise<void> {
 	await deleteRalphNote(cwd, state.name);
+	await deleteRalphIterations(cwd, state.name);
 }
 
 export async function archiveState(cwd: string, state: MattRalphState): Promise<MattRalphState> {

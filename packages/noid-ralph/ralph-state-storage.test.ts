@@ -113,6 +113,7 @@ describe("Ralph state storage", () => {
 		await writeRalphState(cwd, state.name, state);
 		await appendRalphNote(cwd, state.name, "first");
 		await appendRalphNote(cwd, state.name, " second");
+		await writeJsonAtomically(iterationPathFor(cwd, state.name, 1, "text:example"), { outcome: "accepted" });
 		await setActiveRalphStateName(cwd, "active-example", state.name);
 
 		expect(await getActiveRalphStateName(cwd, "active-example")).toBe(state.name);
@@ -125,6 +126,13 @@ describe("Ralph state storage", () => {
 			name: state.name,
 		});
 		expect(await readFile(notePathFor(cwd, state.name, { archive: true }), "utf8")).toBe("first second");
+		expect(existsSync(iterationPathFor(cwd, state.name, 1, "text:example"))).toBe(false);
+		expect(path.relative(cwd, iterationPathFor(cwd, state.name, 1, "text:example", { archive: true }))).toBe(
+			path.join(".ralph", "archive", "iterations", state.name, "000001-text-example.json"),
+		);
+		expect(
+			JSON.parse(await readFile(iterationPathFor(cwd, state.name, 1, "text:example", { archive: true }), "utf8")),
+		).toEqual({ outcome: "accepted" });
 
 		await deleteRalphState(cwd, state.name, { archive: true });
 		await deleteRalphNote(cwd, state.name, { archive: true });

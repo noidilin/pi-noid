@@ -170,6 +170,22 @@ describe("implementation session", () => {
 		});
 	});
 
+	it("continues the existing running attempt when a paused session resumes", async () => {
+		const cwd = await tempRepo();
+		const adapters = createAdapters();
+		const prepared = await prepareImplementationSessionStart({ cwd, targetArg: "write tests" }, adapters);
+		if (!prepared.ok) throw new Error("expected prepare success");
+		await startImplementationSession(prepared.prepared);
+		const file = iterationPathFor(cwd, "implement-write-tests", 1, "text:write tests");
+		const before = await readFile(file, "utf8");
+
+		await stopImplementationSession(cwd);
+		await resumeImplementationSession(cwd, "implement-write-tests", adapters);
+
+		expect(await readFile(file, "utf8")).toBe(before);
+		expect(JSON.parse(before)).toMatchObject({ outcome: "running" });
+	});
+
 	it("prepares dirty worktree confirmation then starts a durable Implementation session", async () => {
 		const cwd = await tempRepo();
 		const prepared = await prepareImplementationSessionStart(

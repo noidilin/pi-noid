@@ -36,10 +36,25 @@ export function notePathFor(cwd: string, name: string, options: RalphStateFileOp
 	return path.join(options.archive ? ralphArchiveDir(cwd) : ralphDir(cwd), `${name}.md`);
 }
 
-export function iterationPathFor(cwd: string, sessionName: string, iteration: number, targetKey: string): string {
-	const session = safeIterationPathPart(sessionName);
+export function iterationDirectoryFor(cwd: string, sessionName: string, options: RalphStateFileOptions = {}): string {
+	const root = options.archive
+		? path.join(ralphArchiveDir(cwd), "iterations")
+		: path.join(ralphDir(cwd), "iterations");
+	return path.join(root, safeIterationPathPart(sessionName));
+}
+
+export function iterationPathFor(
+	cwd: string,
+	sessionName: string,
+	iteration: number,
+	targetKey: string,
+	options: RalphStateFileOptions = {},
+): string {
 	const target = safeIterationPathPart(targetKey);
-	return path.join(ralphDir(cwd), "iterations", session, `${String(iteration).padStart(6, "0")}-${target}.json`);
+	return path.join(
+		iterationDirectoryFor(cwd, sessionName, options),
+		`${String(iteration).padStart(6, "0")}-${target}.json`,
+	);
 }
 
 export async function ensureRalphStateStorage(cwd: string): Promise<void> {
@@ -163,12 +178,26 @@ export async function deleteRalphNote(cwd: string, name: string, options: RalphS
 	await rm(notePathFor(cwd, name, options), { force: true });
 }
 
+export async function deleteRalphIterations(
+	cwd: string,
+	name: string,
+	options: RalphStateFileOptions = {},
+): Promise<void> {
+	await rm(iterationDirectoryFor(cwd, name, options), { force: true, recursive: true });
+}
+
 export async function archiveRalphStateFiles(cwd: string, name: string): Promise<void> {
 	await ensureRalphStateStorage(cwd);
 	const sourceState = statePathFor(cwd, name);
 	if (existsSync(sourceState)) await rename(sourceState, statePathFor(cwd, name, { archive: true }));
 	const sourceNote = notePathFor(cwd, name);
 	if (existsSync(sourceNote)) await rename(sourceNote, notePathFor(cwd, name, { archive: true }));
+	const sourceIterations = iterationDirectoryFor(cwd, name);
+	if (existsSync(sourceIterations)) {
+		const archivedIterations = iterationDirectoryFor(cwd, name, { archive: true });
+		await mkdir(path.dirname(archivedIterations), { recursive: true });
+		await rename(sourceIterations, archivedIterations);
+	}
 }
 
 type GitRepository = { workTree: string; gitDir: string };

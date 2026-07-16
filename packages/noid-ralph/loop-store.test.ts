@@ -1,9 +1,10 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listStateRecords, readState, writeState } from "./loop-store";
-import { statePathFor } from "./ralph-state-storage";
+import { deleteState, deleteTask, listStateRecords, readState, writeState } from "./loop-store";
+import { iterationPathFor, notePathFor, statePathFor, writeJsonAtomically } from "./ralph-state-storage";
 import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
 async function tempRepo(): Promise<string> {
@@ -108,5 +109,22 @@ describe("loop store", () => {
 		expect(records).toHaveLength(2);
 		expect(records[0]).toMatchObject({ kind: "state", state: { name: "implement-issue-34" } });
 		expect(records[1]).toMatchObject({ kind: "unsupported", name: "implement-old" });
+	});
+
+	it("preserves diagnostics when deleting state and removes them only for clean-all", async () => {
+		const cwd = await tempRepo();
+		const state = createState({ status: "completed" });
+		await writeState(cwd, state);
+		await writeFile(notePathFor(cwd, state.name), "notes\n", "utf8");
+		await writeJsonAtomically(iterationPathFor(cwd, state.name, 1, "github:34"), { outcome: "accepted" });
+
+		await deleteState(cwd, state.name);
+		expect(existsSync(statePathFor(cwd, state.name))).toBe(false);
+		expect(existsSync(notePathFor(cwd, state.name))).toBe(true);
+		expect(existsSync(iterationPathFor(cwd, state.name, 1, "github:34"))).toBe(true);
+
+		await deleteTask(cwd, state);
+		expect(existsSync(notePathFor(cwd, state.name))).toBe(false);
+		expect(existsSync(iterationPathFor(cwd, state.name, 1, "github:34"))).toBe(false);
 	});
 });
