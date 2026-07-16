@@ -9,6 +9,24 @@ export type AcceptanceCriterion = {
 	source: "section" | "checklist" | "structured";
 };
 
+export type CriterionEvidence = {
+	criterionId: string;
+	evidence: string;
+};
+
+export type ValidationEvidence = {
+	command: string;
+	outcome: string;
+};
+
+export type TargetCompletionEvidence = {
+	summary: string;
+	criteria: CriterionEvidence[];
+	validation: ValidationEvidence[];
+	commit: string;
+	notesUpdated: boolean;
+};
+
 export type ResolvedImplementationTarget = {
 	key: string;
 	source: TargetSourceKind;

@@ -98,12 +98,14 @@ export async function runChildIssue(
 ): Promise<ChildRunOutcome> {
 	const facts: Partial<ChildRunFacts> = {};
 	const diagnostics: ChildRunDiagnostics = {};
+	input.run.attempt = (input.run.attempt ?? 0) + 1;
 	const apply = async (progress: ChildRunProgress) => {
 		applyChildRunProgress(input.run, progress);
 		await onStateChanged?.(progress);
 	};
 	const fail = async (reason: string, extraDiagnostics: ChildRunDiagnostics = {}): Promise<ChildRunOutcome> => {
 		Object.assign(diagnostics, extraDiagnostics);
+		facts.completedAt ??= adapters.now();
 		await apply({ type: "failed", reason, facts, diagnostics });
 		return { ok: false, reason, facts, diagnostics };
 	};
@@ -270,6 +272,7 @@ function applyChildRunProgress(run: OrchestrateIssueRun, progress: ChildRunProgr
 	}
 	if (progress.type === "failed") {
 		run.status = "failed";
+		run.completedAt = progress.facts.completedAt;
 		run.error = progress.reason;
 	}
 }

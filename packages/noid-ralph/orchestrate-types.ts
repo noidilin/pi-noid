@@ -42,6 +42,7 @@ export type OrchestrateIssueRun = {
 	issue: number;
 	title: string;
 	status: "pending" | "running" | "completed" | "skipped" | "failed";
+	attempt?: number;
 	sessionName?: string;
 	startedAt?: string;
 	completedAt?: string;

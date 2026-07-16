@@ -167,6 +167,7 @@ describe("child run", () => {
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected failure");
 		expect(outcome.reason).toBe("Worker timed out before sentinel.");
+		expect(outcome.facts.completedAt).toBe("2026-01-01T00:00:03.000Z");
 		expect(outcome.diagnostics.paneTail).toContain("RALPH_WORKER_EXIT");
 		expect(run).toMatchObject({
 			status: "failed",
@@ -174,6 +175,14 @@ describe("child run", () => {
 			workerExitedAt: "2026-01-01T00:00:02.000Z",
 			workerExitCode: 0,
 		});
+	});
+
+	it("increments the durable attempt number when a failed child run is retried", async () => {
+		const run = createRun();
+		await runChildIssue(createInput(run), createAdapters({ workerExited: false }));
+		await runChildIssue(createInput(run), createAdapters({ workerExited: false }));
+
+		expect(run.attempt).toBe(2);
 	});
 
 	it("returns a failed outcome when the child Ralph session is incomplete", async () => {

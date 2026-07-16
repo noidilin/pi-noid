@@ -11,6 +11,7 @@ import {
 	viewIssue,
 } from "./github";
 import { assertInsideHerdr, createWorkerPane, getFocusedPane, sendKeys } from "./herdr-runner";
+import { persistChildRunProgress } from "./iteration-log";
 import { listStates } from "./loop-store";
 import { buildOrchestratePlan } from "./orchestrate-planner";
 import {
@@ -230,6 +231,11 @@ async function recordChildRunProgress(
 	run: OrchestrateIssueRun,
 	progress: ChildRunProgress,
 ): Promise<void> {
+	await persistChildRunProgress(
+		ctx.cwd,
+		{ orchestrationName: state.name, index: Math.max(0, (run.attempt ?? 1) - 1), issue: run.issue, title: run.title },
+		progress,
+	);
 	if (progress.type === "started") {
 		await appendRalphNote(ctx.cwd, state.name, formatChildRunStartedNote(run));
 	}
