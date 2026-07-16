@@ -11,6 +11,7 @@ import {
 	isGitRepo,
 	viewIssue,
 } from "./github";
+import { openIterationRecord } from "./iteration-log";
 import { getActiveState, listStates, readState, sanitizeSessionName, setActiveSession, writeState } from "./loop-store";
 import {
 	finalPromptContext,
@@ -204,6 +205,7 @@ export async function startImplementationSession(
 	await writeFile(taskFileAbs, initialTaskFile(state), "utf8");
 	await writeState(prepared.cwd, state);
 	await setActiveSession(prepared.cwd, name);
+	await openCurrentIterationRecord(prepared.cwd, state, state.startedAt);
 
 	return {
 		state,
@@ -325,6 +327,7 @@ export async function advanceImplementationSession(input: {
 			effects,
 		};
 	}
+	await openCurrentIterationRecord(input.cwd, state, state.lastAdvancedAt);
 	effects.push({
 		type: "prompt",
 		prompt: renderRalphPrompt("implementation.next", iterationPromptContext(state, "next")),
@@ -370,6 +373,20 @@ export async function completeImplementationSession(input: {
 
 export function buildImplementationSessionSystemInjection(state: MattRalphState): string {
 	return renderRalphPrompt("implementation.systemInjection", systemInjectionContext(state));
+}
+
+async function openCurrentIterationRecord(cwd: string, state: MattRalphState, startedAt: string): Promise<void> {
+	const target = state.targetPlan.targets[state.currentIndex];
+	if (!target) return;
+	await openIterationRecord(cwd, {
+		sessionName: state.name,
+		iteration: state.iteration,
+		targetKey: target.key,
+		targetTitle: target.title,
+		source: target.source,
+		startedAt,
+		acceptanceCriteria: target.acceptanceCriteria,
+	});
 }
 
 async function preflightWarnings(

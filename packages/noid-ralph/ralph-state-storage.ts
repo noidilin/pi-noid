@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +16,10 @@ export type RalphStateRecord<TState> = { kind: "state"; state: TState } | Unsupp
 
 export type RalphStateParser<TState> = (value: unknown, file: string) => TState;
 
+type AtomicJsonAdapters = {
+	rename?: (source: string, destination: string) => Promise<void>;
+};
+
 export function ralphDir(cwd: string): string {
 	return path.join(cwd, ".ralph");
 }
@@ -29,6 +34,12 @@ export function statePathFor(cwd: string, name: string, options: RalphStateFileO
 
 export function notePathFor(cwd: string, name: string, options: RalphStateFileOptions = {}): string {
 	return path.join(options.archive ? ralphArchiveDir(cwd) : ralphDir(cwd), `${name}.md`);
+}
+
+export function iterationPathFor(cwd: string, sessionName: string, iteration: number, targetKey: string): string {
+	const session = safeIterationPathPart(sessionName);
+	const target = safeIterationPathPart(targetKey);
+	return path.join(ralphDir(cwd), "iterations", session, `${String(iteration).padStart(6, "0")}-${target}.json`);
 }
 
 export async function ensureRalphStateStorage(cwd: string): Promise<void> {
@@ -48,6 +59,22 @@ export async function ensureRalphGitIgnores(cwd: string): Promise<void> {
 	);
 }
 
+export async function writeJsonAtomically(
+	file: string,
+	value: unknown,
+	adapters: AtomicJsonAdapters = {},
+): Promise<void> {
+	await mkdir(path.dirname(file), { recursive: true });
+	const temporaryFile = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
+	try {
+		await writeFile(temporaryFile, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+		await (adapters.rename ?? rename)(temporaryFile, file);
+	} catch (error) {
+		await rm(temporaryFile, { force: true });
+		throw error;
+	}
+}
+
 export async function writeRalphState<TState extends { name: string }>(
 	cwd: string,
 	name: string,
@@ -56,7 +83,7 @@ export async function writeRalphState<TState extends { name: string }>(
 ): Promise<void> {
 	await ensureRalphStateStorage(cwd);
 	await mkdir(options.archive ? ralphArchiveDir(cwd) : ralphDir(cwd), { recursive: true });
-	await writeFile(statePathFor(cwd, name, options), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+	await writeJsonAtomically(statePathFor(cwd, name, options), state);
 }
 
 export async function readRalphState<TState>(
@@ -176,6 +203,15 @@ async function appendUniqueLine(file: string, line: string, block: string): Prom
 
 function toGitPath(value: string): string {
 	return value.split(path.sep).filter(Boolean).join("/");
+}
+
+function safeIterationPathPart(value: string): string {
+	return (
+		value
+			.trim()
+			.replace(/[^a-zA-Z0-9._-]+/g, "-")
+			.replace(/^[._-]+|[._-]+$/g, "") || "unnamed"
+	);
 }
 
 function recordStartedAt<TState>(

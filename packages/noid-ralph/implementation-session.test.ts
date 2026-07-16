@@ -12,7 +12,7 @@ import {
 	stopImplementationSession,
 } from "./implementation-session";
 import { getActiveState, readState, setActiveSession, writeState } from "./loop-store";
-import { notePathFor } from "./ralph-state-storage";
+import { iterationPathFor, notePathFor } from "./ralph-state-storage";
 import { MATT_RALPH_SCHEMA_VERSION, type MattRalphState } from "./types";
 
 async function tempRepo(): Promise<string> {
@@ -132,6 +132,26 @@ describe("implementation session", () => {
 		expect(prompt?.prompt.match(/Child works/g)).toHaveLength(1);
 	});
 
+	it("opens a running iteration record before returning the kickoff prompt", async () => {
+		const cwd = await tempRepo();
+		const prepared = await prepareImplementationSessionStart({ cwd, targetArg: "write tests" }, createAdapters());
+		if (!prepared.ok) throw new Error("expected prepare success");
+
+		const result = await startImplementationSession(prepared.prepared);
+
+		expect(result.effects).toContainEqual(expect.objectContaining({ type: "prompt" }));
+		const record = JSON.parse(
+			await readFile(iterationPathFor(cwd, "implement-write-tests", 1, "text:write tests"), "utf8"),
+		);
+		expect(record).toMatchObject({
+			schemaVersion: 1,
+			sessionName: "implement-write-tests",
+			iteration: 1,
+			targetKey: "text:write tests",
+			outcome: "running",
+		});
+	});
+
 	it("prepares dirty worktree confirmation then starts a durable Implementation session", async () => {
 		const cwd = await tempRepo();
 		const prepared = await prepareImplementationSessionStart(
@@ -157,6 +177,38 @@ describe("implementation session", () => {
 		});
 		expect((await getActiveState(cwd))?.name).toBe("implement-write-tests");
 		expect(await readFile(notePathFor(cwd, "implement-write-tests"), "utf8")).toContain("## Preflight");
+	});
+
+	it("opens the next running iteration record before returning its prompt", async () => {
+		const cwd = await tempRepo();
+		const first = createState().targetPlan.targets[0];
+		const second = {
+			key: "github:35",
+			source: "github" as const,
+			title: "Do next thing",
+			issueNumber: 35,
+			acceptanceCriteria: [],
+		};
+		await writeActiveState(
+			cwd,
+			createState({
+				childIssues: [
+					{ number: 34, title: "Do thing", source: "standalone" },
+					{ number: 35, title: "Do next thing", source: "standalone" },
+				],
+				targetPlan: { root: first, targets: [first, second] },
+			}),
+		);
+
+		const result = await advanceImplementationSession({
+			cwd,
+			hasPendingMessages: false,
+			adapters: createAdapters(),
+		});
+
+		expect(result.effects).toContainEqual(expect.objectContaining({ type: "prompt", deliverAs: "followUp" }));
+		const record = JSON.parse(await readFile(iterationPathFor(cwd, "implement-issue-34", 2, "github:35"), "utf8"));
+		expect(record).toMatchObject({ iteration: 2, targetKey: "github:35", outcome: "running" });
 	});
 
 	it("advances to final verification through an effect list", async () => {

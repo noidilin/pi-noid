@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,11 +10,13 @@ import {
 	deleteRalphState,
 	ensureRalphStateStorage,
 	getActiveRalphStateName,
+	iterationPathFor,
 	listRalphStateRecords,
 	notePathFor,
 	readRalphState,
 	setActiveRalphStateName,
 	statePathFor,
+	writeJsonAtomically,
 	writeRalphState,
 } from "./ralph-state-storage";
 
@@ -35,6 +37,38 @@ function parseExampleState(value: unknown, file: string): ExampleState {
 }
 
 describe("Ralph state storage", () => {
+	it("keeps iteration records inside the Ralph iteration directory", async () => {
+		const cwd = await tempRepo();
+
+		const file = iterationPathFor(cwd, "../../session", 7, "../../../target");
+
+		expect(path.relative(cwd, file)).toBe(path.join(".ralph", "iterations", "session", "000007-target.json"));
+	});
+
+	it("preserves the previous JSON file when an atomic rename fails", async () => {
+		const cwd = await tempRepo();
+		const file = path.join(cwd, "record.json");
+		await writeFile(file, '{"value":"previous"}\n', "utf8");
+
+		const renameSources: string[] = [];
+		await expect(
+			writeJsonAtomically(
+				file,
+				{ value: "replacement" },
+				{
+					rename: async (source) => {
+						renameSources.push(source);
+						throw new Error("rename failed");
+					},
+				},
+			),
+		).rejects.toThrow("rename failed");
+
+		expect(renameSources.map((source) => path.dirname(source))).toEqual([cwd]);
+		expect(await readFile(file, "utf8")).toBe('{"value":"previous"}\n');
+		expect(await readdir(cwd)).toEqual(["record.json"]);
+	});
+
 	it("writes, reads, lists, and reports unsupported state records for one prefix", async () => {
 		const cwd = await tempRepo();
 		await writeRalphState(cwd, "example-one", {
