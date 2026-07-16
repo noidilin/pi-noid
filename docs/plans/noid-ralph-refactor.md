@@ -10,8 +10,9 @@ Progress:
 - Slice 1 complete: target resolution and source-specific finalization live behind the normalized `tracker-adapter.ts` facade; implementation state remains schema v2 through an explicit compatibility mapping.
 - Slice 2 complete: deterministic acceptance-criteria extraction is wired into target resolution; implementation state schema v3 durably stores the normalized target plan, with explicit v2 migration marking criteria unresolved; all five implementation prompt phases render through typed named templates.
 - Slice 3 foundation complete: `ralph-state-storage.ts` owns safe iteration paths and atomic JSON replacement; `iteration-log.ts` opens durable `running` records before kickoff and next-target prompts.
+- Slice 3 implementation lifecycle progress: iteration reads validate durable records, duplicate opens preserve existing attempts, terminal transitions are atomic, and implementation advancement closes the current attempt before mutating progress state.
 
-Next agent: continue Slice 3 one failing temporary-filesystem test at a time. Add validated iteration reads and lifecycle transitions without overwriting stale `running` attempts, then persist implementation acceptance attempts and child-run progress before implementing archive/cancel/clean policy.
+Next agent: continue Slice 3 one failing temporary-filesystem test at a time. Persist completion evidence and rejection details through the iteration transition seam, then persist child-run progress before implementing stale-attempt recovery and archive/cancel/clean policy.
 
 ## 1. Goal
 

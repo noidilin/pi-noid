@@ -11,7 +11,7 @@ import {
 	isGitRepo,
 	viewIssue,
 } from "./github";
-import { openIterationRecord } from "./iteration-log";
+import { closeIterationRecord, openIterationRecord } from "./iteration-log";
 import { getActiveState, listStates, readState, sanitizeSessionName, setActiveSession, writeState } from "./loop-store";
 import {
 	finalPromptContext,
@@ -286,9 +286,11 @@ export async function advanceImplementationSession(input: {
 	const state = await getActiveState(input.cwd);
 	if (!state) return { message: "No active Matt Ralph session found.", effects: [] };
 
+	const advancedAt = input.adapters.now();
+	await closeCurrentIterationRecord(input.cwd, state, advancedAt);
 	state.iteration += 1;
 	state.currentIndex += 1;
-	state.lastAdvancedAt = input.adapters.now();
+	state.lastAdvancedAt = advancedAt;
 	await appendRalphNote(
 		input.cwd,
 		state.name,
@@ -387,6 +389,22 @@ async function openCurrentIterationRecord(cwd: string, state: MattRalphState, st
 		startedAt,
 		acceptanceCriteria: target.acceptanceCriteria,
 	});
+}
+
+async function closeCurrentIterationRecord(cwd: string, state: MattRalphState, endedAt: string): Promise<void> {
+	const target = state.targetPlan.targets[state.currentIndex];
+	if (!target) return;
+	try {
+		await closeIterationRecord(cwd, {
+			sessionName: state.name,
+			iteration: state.iteration,
+			targetKey: target.key,
+			outcome: "accepted",
+			endedAt,
+		});
+	} catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+	}
 }
 
 async function preflightWarnings(

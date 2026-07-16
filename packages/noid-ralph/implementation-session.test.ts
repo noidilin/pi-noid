@@ -152,6 +152,24 @@ describe("implementation session", () => {
 		});
 	});
 
+	it("persists the current attempt as accepted before advancing", async () => {
+		const cwd = await tempRepo();
+		const adapters = createAdapters();
+		const prepared = await prepareImplementationSessionStart({ cwd, targetArg: "write tests" }, adapters);
+		if (!prepared.ok) throw new Error("expected prepare success");
+		await startImplementationSession(prepared.prepared);
+
+		await advanceImplementationSession({ cwd, hasPendingMessages: false, adapters });
+
+		const record = JSON.parse(
+			await readFile(iterationPathFor(cwd, "implement-write-tests", 1, "text:write tests"), "utf8"),
+		);
+		expect(record).toMatchObject({
+			outcome: "accepted",
+			endedAt: "2026-01-01T00:00:00.000Z",
+		});
+	});
+
 	it("prepares dirty worktree confirmation then starts a durable Implementation session", async () => {
 		const cwd = await tempRepo();
 		const prepared = await prepareImplementationSessionStart(
