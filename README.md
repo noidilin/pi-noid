@@ -5,8 +5,9 @@ Local pi extension monorepo for personal workflow helpers. The root `package.jso
 - `noid-bar` — compact lualine-style footer/status bar.
 - `noid-bar-config` — personal bar layout and extra bar components.
 - `noid-skm` — interactive skill manager for trimming model context.
-- `noid-ralph` — Matt/Ralph implementation and orchestration workflow.
+- `noid-ralph` — Matt/Ralph implementation and orchestration workflow. **Parked — not loaded.**
 - `noid-alive` — AWS resource discovery command/tool.
+- `noid-remote-figma` — OAuth + MCP config for Figma's hosted Remote MCP server.
 
 ## Setup
 
@@ -70,7 +71,15 @@ Interactive keys:
 
 State is stored under the XDG pi config directory, including `skill-manager.json` and skill group configuration.
 
-### Ralph (`noid-ralph`)
+### Ralph (`noid-ralph`) — parked
+
+> **Disabled, source retained.** `./packages/noid-ralph/index.ts` is off the root `pi.extensions` list, so pi does
+> not load it and none of the `/ralph` commands are registered. The package, its tests, and its notes stay in the
+> workspace and still typecheck and run under `npm run check` / `npm test`, so it will not rot while parked.
+> Re-enable by adding the entrypoint back to `pi.extensions` in the root `package.json` and to the expected list in
+> `packages/noid-bar/ship-manifest.test.ts`. Existing `.ralph/` state directories in your projects are untouched.
+>
+> The rest of this section documents the behavior as it was when last loaded.
 
 Ralph is a disciplined implementation loop inspired by Matt Pocock-style agent workflows, with optional herdr-backed orchestration for GitHub parent issues.
 
@@ -137,3 +146,57 @@ Examples:
 ```
 
 Use when asking pi which AWS services/resources are alive in the authenticated account.
+
+### Remote Figma (`noid-remote-figma`)
+
+Authenticates and configures Figma's hosted Remote MCP server (`https://mcp.figma.com/mcp`) so an existing
+[`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) install can expose Figma tools in pi. Ported from
+[`DianP/pi-figma-remote-auth`](https://github.com/DianP/pi-figma-remote-auth). It is **not** the local Figma desktop
+MCP bridge — remote endpoint only.
+
+Two jobs: write the `mcpServers.figma` entry with `auth: "oauth"`, then run the OAuth 2.1 + PKCE flow and save the
+tokens where `pi-mcp-adapter` looks for them.
+
+Prerequisite — install the adapter first, then restart pi:
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+Commands:
+
+```text
+/figma help
+/figma status [--server figma]
+/figma setup  [--global|--project|--shared] [--server name] [--url url] [--direct-tools] [--keep-alive]
+/figma login  [--server figma] [--url url] [--client-name Codex] [--port n]
+/figma logout [--server figma]
+```
+
+Typical first run is `/figma setup` then `/figma login`. `login` prints a copyable authorization URL — the browser is
+never opened automatically. After authorizing, restart pi or run `/mcp reconnect figma`, then use the adapter proxy:
+
+```ts
+mcp({ connect: "figma" });
+mcp({ tool: "figma_TOOL_NAME", args: "{}" });
+```
+
+Config targets: `--global` (default) writes `<pi agent dir>/mcp.json`, `--project` writes `.pi/mcp.json`, `--shared`
+writes `.mcp.json`. Pass the same `--url` to both `setup` and `login` — the adapter matches stored credentials to the
+configured URL string exactly.
+
+Token store: `login` writes `<base>/sha256-<sha256(serverName)>/tokens.json` with mode `0600`, where `<base>` is
+`$MCP_OAUTH_DIR` (used verbatim, no `~` expansion) or `<pi agent dir>/mcp-oauth`. Adapter 2.7.0–2.12.x reads that
+plaintext file in place; >= 2.13.0 imports it into the OS credential store on the next connect and deletes it, so a
+missing file after a successful `login` is expected. `logout` only removes plaintext files — use `/mcp logout figma`
+to clear credentials already in the OS store.
+
+Two things worth knowing:
+
+- Dynamic client registration sends `client_name: "Codex"` by default, because Figma allowlists which MCP clients may
+  register. Override with `--client-name` if you would rather not present as another vendor's client.
+- The OAuth callback server binds `127.0.0.1` only, so the callback is not reachable from the LAN (upstream bound
+  every interface), but the advertised redirect URI must spell the host `localhost`. Figma accepts a literal
+  `127.0.0.1` redirect URI at dynamic registration *and* at the authorize step, then rejects the token exchange
+  with `invalid_grant` — so the bind host and the advertised host are deliberately different constants in
+  `oauth.ts`, pinned by `oauth.test.ts`. Do not "fix" them to match.

@@ -1,0 +1,21 @@
+{
+	"name": "noid-remote-figma",
+	"version": "0.1.0",
+	"type": "module",
+	"exports": {
+		".": "./index.ts"
+	},
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"pi-mcp-adapter": ">=2.7.0"
+	},
+	"peerDependenciesMeta": {
+		"pi-mcp-adapter": {
+			"optional": true
+		}
+	}
+}
