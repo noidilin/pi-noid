@@ -20,9 +20,6 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.21
-      typebox:
-        specifier: ^1.1.34
-        version: 1.2.11
       typescript:
         specifier: ^6.0.0
         version: 6.0.3
@@ -957,9 +954,6 @@ packages:
 
   typebox@1.1.38:
     resolution: {integrity: sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==}
-
-  typebox@1.2.11:
-    resolution: {integrity: sha512-0WPn8EoKHPZiACD/mgU+TY+SP7kn5S3pPmeoOBXhkwqkX/W4XyRLfYrDC8Nnhf23OhRf+yMe/atZtyiOLbgSVg==}
 
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
@@ -2083,8 +2077,6 @@ snapshots:
   tslib@2.8.1: {}
 
   typebox@1.1.38: {}
-
-  typebox@1.2.11: {}
 
   typescript@6.0.3: {}
 

@@ -1,146 +1,180 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { notifyBarChanged, registerBarModule } from "noid-bar/api";
-import { createSkillCatalog } from "./catalog";
-import { handleSkillManagerCommand } from "./commands";
-import { getSkillManagerCompletions } from "./completions";
-import { formatEffectiveSkillSet } from "./format";
-import { SkillGroupsStore } from "./groups-store";
-import { applySkillFilter } from "./prompt-filter";
+import {
+	installSkillManagerFooter,
+	refreshSkillFooterThinkingLevel,
+	requestSkillFooterRender,
+	setSkillFooterThinkingLevel,
+} from "./footer";
+import { PROFILE_CUSTOM_TYPE } from "./paths";
+import { chooseProfile, resolveProfile } from "./profile-policy";
+import { ProfilesStore } from "./profiles-store";
+import {
+	lockProfile,
+	persistedProfile,
+	reconstructProfile,
+	type SessionProfile,
+	selectProfile,
+} from "./session-profile";
+import { filterSkills } from "./skill-filter";
 import { getSkillItems } from "./skills";
-import { SkillManagerStateStore } from "./state-store";
-import { normalizeSelection, type SkillManagerSelection } from "./state-transition";
-import { showSkillSelector } from "./tui";
-
-let skillManagerStatusText = "skills: loading";
-
-export const skillManagerBar = {
-	name: "skill-manager",
-	components: {
-		status: () => skillManagerStatusText,
-	},
-};
 
 export default function skillManagerExtension(pi: ExtensionAPI) {
-	const state = new SkillManagerStateStore(pi);
-	const groupsStore = new SkillGroupsStore();
-	let promptFilterWarned = false;
+	const store = new ProfilesStore();
+	let session: SessionProfile = { status: "unbound" };
+	let diagnostics: string[] = [];
+	let hasHistory = false;
+	let statusText = "skills: loading";
 
-	registerBarModule({
-		key: "skill-manager",
-		priority: 20,
-		render: () => skillManagerStatusText,
-	});
+	pi.registerFlag("skill-profile", { description: "Skill profile for a new session", type: "string" });
 
-	async function getCatalog() {
-		const groupsSnapshot = await groupsStore.load();
-		const stateSnapshot = state.snapshot();
-		return createSkillCatalog({
-			skills: getSkillItems(pi),
-			groupsConfig: groupsSnapshot.groups,
-			disabledSkills: stateSnapshot.disabledSkills,
-			selectedSkillSet: stateSnapshot.selectedSkillSet,
-			storeIssues: [...stateSnapshot.issues, ...groupsSnapshot.issues],
-		});
+	function notify(ctx: ExtensionContext, text: string, level: "info" | "warning" = "info") {
+		if (ctx.hasUI) ctx.ui.notify(text, level);
+		else pi.sendMessage({ customType: "skill-manager-status", content: text, display: true });
 	}
 
-	async function updateStatus(ctx: ExtensionContext) {
-		const catalog = await getCatalog();
-		const suffix = catalog.disabledSkillNames.length > 0 ? ` (-${catalog.disabledSkillNames.length})` : "";
-		const warning = catalog.issues.some(
-			(issue) => issue.kind === "state-load-error" || issue.kind === "groups-load-error",
-		)
-			? " ⚠"
-			: "";
-		const projectSuffix =
-			catalog.protectedProjectSkillNames.length > 0 ? ` +${catalog.protectedProjectSkillNames.length}p` : "";
-		skillManagerStatusText = `skills: ${formatEffectiveSkillSet(catalog.effectiveSkillSet)}${suffix}${projectSuffix}${warning}`;
-		ctx.ui.setStatus("skill-manager", undefined);
-		notifyBarChanged();
+	function candidate() {
+		return session.status === "unbound"
+			? chooseProfile(store.snapshot().config, pi.getFlag("skill-profile"))
+			: { name: session.profileName, diagnostics: [] };
 	}
 
-	async function saveAndRefresh(ctx: ExtensionContext) {
-		await state.queueSave(ctx);
-		await updateStatus(ctx);
+	function refresh() {
+		const selected = candidate();
+		const name = session.status === "unbound" ? selected.name : session.profileName;
+		statusText = `skills: ${name} · ${session.status === "locked" ? "locked" : "open"}${store.snapshot().readOnly || diagnostics.length || selected.diagnostics.length || name === "fallback" ? " ⚠" : ""}`;
+		requestSkillFooterRender();
 	}
 
-	async function saveGroupsAndRefresh(groups: Record<string, string[]>, ctx: ExtensionContext) {
-		await groupsStore.save(groups);
-		await updateStatus(ctx);
+	async function load(skills = getSkillItems(pi)) {
+		await store.load(skills);
+		refresh();
 	}
 
-	function stateGateway(ctx: ExtensionContext, catalog: Awaited<ReturnType<typeof getCatalog>>) {
-		return {
-			current: () => normalizeSelection(state.getSelection(), catalog),
-			replace: (selection: SkillManagerSelection) => state.setSelection(selection),
-			saveAndRefresh: () => saveAndRefresh(ctx),
-		};
+	function append(state: SessionProfile) {
+		session = state;
+		if (state.status !== "unbound") pi.appendEntry(PROFILE_CUSTOM_TYPE, persistedProfile(state));
+		refresh();
 	}
 
-	async function showSelector(ctx: ExtensionContext) {
-		const catalog = await getCatalog();
-		await showSkillSelector({
-			ctx,
-			catalog,
-			state: stateGateway(ctx, catalog),
-			saveGroups: (groups) => saveGroupsAndRefresh(groups, ctx),
-		});
+	function lock(ctx: ExtensionContext, skills = getSkillItems(pi)) {
+		if (session.status === "locked") return;
+		const choice = candidate();
+		const name = choice.name;
+		diagnostics.push(...choice.diagnostics);
+		if (name !== "fallback" && !store.snapshot().config.profiles[name])
+			diagnostics.push(`Selected profile no longer exists: ${name}; using core skills`);
+		const resolution = resolveProfile(store.snapshot().config, name, skills);
+		diagnostics.push(...resolution.unknown.map((member) => `Uninstalled profile member: ${member}`));
+		append(lockProfile(name, resolution.names));
+		if (hasHistory) notify(ctx, `Legacy session bound to ${name}; profile is now locked.`, "warning");
+		hasHistory = false;
 	}
-
-	pi.registerCommand("skm", {
-		description: "Manage skills loaded into model context",
-		argumentHint: "[doctor]",
-		getArgumentCompletions: async (argumentPrefix: string) => {
-			await state.load();
-			return getSkillManagerCompletions(argumentPrefix, await getCatalog());
-		},
-		handler: async (args: string, ctx: ExtensionContext) => {
-			await state.load();
-			const catalog = await getCatalog();
-			await handleSkillManagerCommand({
-				pi,
-				ctx,
-				args,
-				catalog,
-				showSelector: () => showSelector(ctx),
-			});
-		},
-	} as any);
 
 	pi.on("session_start", async (_event, ctx) => {
-		await state.load();
-		await updateStatus(ctx);
+		session = { status: "unbound" };
+		diagnostics = [];
+		const branch = reconstructProfile(ctx.sessionManager.getBranch());
+		session = branch.state;
+		hasHistory = branch.hasHistory && session.status === "unbound";
+		diagnostics.push(...branch.diagnostics);
+		// Resources are discovered after session_start; defer migration and legacy locking
+		// until before_agent_start, where Pi supplies the authoritative skill collection.
+		refreshSkillFooterThinkingLevel(ctx);
+		installSkillManagerFooter(ctx, () => statusText);
 	});
+
+	pi.on("model_select", () => requestSkillFooterRender());
+	pi.on("thinking_level_select", (event) => setSkillFooterThinkingLevel(event.level));
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		const stateSnapshot = await state.load();
-		const skills = event.systemPromptOptions.skills ?? [];
-		await updateStatus(ctx);
-		if (stateSnapshot.disabledSkills.size === 0 || skills.length === 0) return;
-		const catalog = await getCatalog();
-		const effectiveDisabledSkills = new Set(
-			Array.from(stateSnapshot.disabledSkills).filter((name) => !catalog.protectedProjectSkillNames.includes(name)),
-		);
-		if (effectiveDisabledSkills.size === 0) return;
-		const result = applySkillFilter(event.systemPrompt, skills, effectiveDisabledSkills);
-		if (!result.changed && !promptFilterWarned) {
-			promptFilterWarned = true;
-			ctx.ui.notify(
-				"Skill Manager could not locate the skills block; disabled skills may still be visible this turn.",
-				"warning",
-			);
-		}
-		return result.changed ? { systemPrompt: result.systemPrompt } : undefined;
+		// Resolve and migrate using Pi's structured skill collection, not slash commands.
+		const items = (event.systemPromptOptions.skills ?? []).map((skill) => ({
+			name: skill.name,
+			scope: skill.sourceInfo?.scope,
+		}));
+		await load(items);
+		if (session.status !== "locked") lock(ctx, items);
+		if (session.status !== "locked") throw new Error("Profile lock failed");
+		const filtered = filterSkills(event.systemPromptOptions.skills ?? [], new Set(session.resolvedGlobalSkills));
+		event.systemPromptOptions.skills = filtered.skills;
+		diagnostics.push(...filtered.diagnostics.filter((message) => !diagnostics.includes(message)));
+		refresh();
 	});
 
-	pi.on("input", async (event, ctx) => {
-		const stateSnapshot = await state.load();
-		const match = event.text.match(/(?:^|\s)\/skill:([^\s]+)\b/);
-		if (!match) return { action: "continue" as const };
-		const skillName = match[1];
-		const catalog = await getCatalog();
-		if (catalog.protectedProjectSkillNames.includes(skillName)) return { action: "continue" as const };
-		if (!stateSnapshot.disabledSkills.has(skillName)) return { action: "continue" as const };
-		ctx.ui.notify(`Skill disabled: ${skillName}. Re-enable it from /skm.`, "warning");
-		return { action: "handled" as const };
+	pi.registerCommand("skm", {
+		description: "Select a session skill profile or inspect configuration",
+		getArgumentCompletions: async (prefix) => {
+			await load();
+			const names = Object.keys(store.snapshot().config.profiles);
+			const options = [
+				"profile",
+				"default",
+				"doctor",
+				...names.map((name) => `profile ${name}`),
+				...names.map((name) => `default ${name}`),
+			];
+			return options
+				.filter((option) => option.startsWith(prefix))
+				.map((option) => ({ value: option, label: option }));
+		},
+		handler: async (args, ctx) => {
+			await load();
+			const [action, name, ...extra] = args.trim().split(/\s+/).filter(Boolean);
+			const config = store.snapshot();
+			const available = Object.keys(config.config.profiles).sort();
+			if (!action) {
+				const text = `${statusText}; profiles: ${available.join(", ") || "none"}`;
+				if (ctx.hasUI && session.status !== "locked" && available.length) {
+					const selected = await ctx.ui.select(text, available);
+					if (selected) {
+						append(selectProfile(session, selected));
+						notify(ctx, `Selected ${selected}; locks on first agent run.`);
+					}
+				} else notify(ctx, text);
+				return;
+			}
+			if (action === "doctor" && !name) {
+				const members = Object.keys(config.config.profiles).flatMap((profile) =>
+					resolveProfile(config.config, profile, getSkillItems(pi)).unknown.map(
+						(skill) => `${profile}: uninstalled ${skill}`,
+					),
+				);
+				notify(
+					ctx,
+					[
+						`Profiles: ${config.readOnly ? "read-only fallback" : config.migrated ? "migrated" : "loaded"}`,
+						`Session: ${statusText}`,
+						`Default: ${config.config.defaultProfile || "fallback"}`,
+						`Available: ${available.join(", ") || "none"}`,
+						"Legacy groups: read-only, not used",
+						...config.diagnostics,
+						...diagnostics,
+						...candidate().diagnostics,
+						...members,
+					].join("\n"),
+				);
+				return;
+			}
+			if ((action === "profile" || action === "default") && name && !extra.length) {
+				if (!config.config.profiles[name]) {
+					notify(ctx, `Unknown profile: ${name}. Available: ${available.join(", ") || "none"}`, "warning");
+					return;
+				}
+				try {
+					if (action === "profile") {
+						append(selectProfile(session, name));
+						notify(ctx, `Selected ${name}; locks on first agent run.`);
+					} else {
+						await store.setDefault(name);
+						refresh();
+						notify(ctx, `Default profile set to ${name} for future unbound sessions.`);
+					}
+				} catch (error) {
+					notify(ctx, String(error), "warning");
+				}
+				return;
+			}
+			notify(ctx, "Usage: /skm [profile <name>|default <name>|doctor]", "warning");
+		},
 	});
 }

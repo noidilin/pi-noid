@@ -8,9 +8,6 @@
 	"pi": {
 		"extensions": ["./index.ts"]
 	},
-	"dependencies": {
-		"noid-bar": "0.1.0"
-	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
 		"@earendil-works/pi-tui": "*"
