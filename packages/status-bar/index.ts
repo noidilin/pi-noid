@@ -3,24 +3,13 @@ import { stripVTControlCharacters } from "node:util";
 import { type ExtensionAPI, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-/** Keep usage truly centered; truncate the outer sections before they overlap. */
-export function layoutStatusBar(width: number, left: string, middle: string, right: string): string {
+/** Group usage with the model on the right; give the left all remaining space. */
+export function layoutStatusBar(width: number, left: string, usage: string, right: string): string {
 	if (width <= 0) return "";
-	const center = truncateToWidth(middle, Math.floor(width / 2));
-	const centerWidth = visibleWidth(center);
-	const centerStart = Math.floor((width - centerWidth) / 2);
-	const leftBudget = Math.max(0, centerStart - (centerWidth ? 1 : 0));
-	const rightStart = centerStart + centerWidth;
-	const rightBudget = Math.max(0, width - rightStart - (centerWidth ? 1 : 0));
+	const rhs = truncateToWidth([usage, right].filter(Boolean).join("  "), width);
+	const leftBudget = Math.max(0, width - visibleWidth(rhs) - 2);
 	const lhs = truncateToWidth(left, leftBudget);
-	const rhs = truncateToWidth(right, rightBudget);
-	return (
-		lhs +
-		" ".repeat(centerStart - visibleWidth(lhs)) +
-		center +
-		" ".repeat(width - rightStart - visibleWidth(rhs)) +
-		rhs
-	);
+	return lhs + " ".repeat(width - visibleWidth(lhs) - visibleWidth(rhs)) + rhs;
 }
 
 export function formatTokens(count: number): string {
@@ -115,7 +104,7 @@ export default function statusBar(pi: ExtensionAPI) {
 				}
 				if (ctx.model && footerData.getAvailableProviderCount() > 1) {
 					const withProvider = `(${ctx.model.provider}) ${model}`;
-					const rightBudget = Math.floor((width - Math.min(visibleWidth(middle), Math.floor(width / 2))) / 2) - 1;
+					const rightBudget = width - visibleWidth(left) - visibleWidth(middle) - 4;
 					if (visibleWidth(withProvider) <= rightBudget) model = withProvider;
 				}
 				const right = theme.fg("dim", model);

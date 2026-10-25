@@ -9,12 +9,19 @@ describe("Pi's original token formatting", () => {
 });
 
 describe("status bar layout", () => {
-	it("centers usage and aligns the outer sections", () => {
+	it("groups usage with the model on the right", () => {
 		const line = layoutStatusBar(80, "~/work $0.012 (1k tokens)", "codex 89%", "gpt · medium");
 		expect(line.startsWith("~/work")).toBe(true);
-		expect(line.indexOf("codex 89%")).toBe(35);
+		expect(line.endsWith("codex 89%  gpt · medium")).toBe(true);
 		expect(line.endsWith("gpt · medium")).toBe(true);
 		expect(visibleWidth(line)).toBe(80);
+	});
+
+	it("allows the left section to extend past the midpoint", () => {
+		const left = "cwd ↑12k ↓3k R100k CH95% $0.100 (sub) 20%/200k (auto)";
+		const line = layoutStatusBar(80, left, "89%", "model");
+		expect(line.startsWith(left)).toBe(true);
+		expect(line.endsWith("89%  model")).toBe(true);
 	});
 
 	it("fits narrow terminals, ANSI colors, and wide characters", () => {
