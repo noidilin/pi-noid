@@ -1,6 +1,12 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { layoutStatusBar } from "./index.ts";
+import { formatTokens, layoutStatusBar } from "./index.ts";
+
+describe("Pi's original token formatting", () => {
+	it("preserves precision, units, and capitalization", () => {
+		expect([999, 1500, 12500, 1500000, 12500000].map(formatTokens)).toEqual(["999", "1.5k", "13k", "1.5M", "13M"]);
+	});
+});
 
 describe("status bar layout", () => {
 	it("centers usage and aligns the outer sections", () => {
