@@ -11,7 +11,8 @@
 	],
 	"pi": {
 		"extensions": [
-			"./packages/noid-remote-figma/index.ts"
+			"./packages/remote-figma/index.ts",
+			"./packages/status-bar/index.ts"
 		]
 	},
 	"scripts": {

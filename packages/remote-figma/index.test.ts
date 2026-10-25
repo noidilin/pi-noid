@@ -47,7 +47,7 @@ function createContext(cwd: string) {
 	};
 }
 
-describe("noid-remote-figma extension", () => {
+describe("remote-figma extension", () => {
 	it("registers a single /figma command with argument completions", () => {
 		const { name, command } = registerExtension();
 		expect(name).toBe("figma");

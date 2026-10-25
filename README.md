@@ -1,6 +1,6 @@
 # noidilin pi extensions
 
-Local Pi extensions: `noid-remote-figma` (Figma hosted Remote MCP). Skills are not managed here: they live in the asm library and are activated per project (noidilin/skills ADR-0012).
+Local Pi extensions: `remote-figma` (Figma hosted Remote MCP) and `status-bar` (custom footer). Skills are not managed here: they live in the asm library and are activated per project (noidilin/skills ADR-0012).
 
 ```bash
 cd ~/.config/pi/extensions
@@ -11,7 +11,7 @@ pnpm test
 
 Reload Pi with `/reload` after editing.
 
-## Remote Figma (`noid-remote-figma`)
+## Remote Figma (`remote-figma`)
 
 Configures Figma's hosted Remote MCP server (`https://mcp.figma.com/mcp`) for an existing `pi-mcp-adapter` installation. Install with `pi install npm:pi-mcp-adapter`, then run `/figma setup` and `/figma login`. After authorization, restart Pi or run `/mcp reconnect figma`.
 

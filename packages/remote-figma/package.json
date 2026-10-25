@@ -1,5 +1,5 @@
 {
-	"name": "noid-remote-figma",
+	"name": "remote-figma",
 	"version": "0.1.0",
 	"type": "module",
 	"exports": {
